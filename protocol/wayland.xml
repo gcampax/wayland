@@ -32,7 +32,7 @@
 
   <!-- The core global object. This is a special singleton object.
        It is used for internal wayland protocol features. -->
-  <interface name="wl_display" version="1">
+  <interface name="wl_display" version="1" client:custom="yes">
     <request name="bind">
       <arg name="name" type="uint"/>
       <arg name="interface" type="string"/>

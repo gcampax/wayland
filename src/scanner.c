@@ -1,3 +1,4 @@
+/* -*- mode: c; c-basic-offset: 8 -*- */
 /*
  * Copyright © 2008-2011 Kristian Høgsberg
  * Copyright © 2011 Intel Corporation
@@ -55,6 +56,7 @@ struct interface {
 	char *name;
 	char *uppercase_name;
 	int version;
+	int client_custom;
 	struct wl_list request_list;
 	struct wl_list event_list;
 	struct wl_list enumeration_list;
@@ -70,6 +72,7 @@ struct message {
 	int type_index;
 	int all_null;
 	int destructor;
+	int client_custom;
 };
 
 enum arg_type {
@@ -146,13 +149,14 @@ start_element(void *data, const char *element_name, const char **atts)
 	struct enumeration *enumeration;
 	struct entry *entry;
 	const char *name, *type, *interface_name, *value;
-	int i, version;
+	int i, version, client_custom;
 
 	name = NULL;
 	type = NULL;
 	version = 0;
 	interface_name = NULL;
 	value = NULL;
+	client_custom = 0;
 	for (i = 0; atts[i]; i += 2) {
 		if (strcmp(atts[i], "name") == 0)
 			name = atts[i + 1];
@@ -164,6 +168,8 @@ start_element(void *data, const char *element_name, const char **atts)
 			value = atts[i + 1];
 		if (strcmp(atts[i], "interface") == 0)
 			interface_name = atts[i + 1];
+		if (strcmp(atts[i], WAYLAND_CLIENT_NS "#custom") == 0)
+			client_custom = (strcmp(atts[i + 1], "yes") == 0);
 	}
 
 	ctx->character_data_length = 0;
@@ -186,6 +192,7 @@ start_element(void *data, const char *element_name, const char **atts)
 		interface->name = strdup(name);
 		interface->uppercase_name = uppercase_dup(name);
 		interface->version = version;
+		interface->client_custom = client_custom;
 		wl_list_init(&interface->request_list);
 		wl_list_init(&interface->event_list);
 		wl_list_init(&interface->enumeration_list);
@@ -202,6 +209,7 @@ start_element(void *data, const char *element_name, const char **atts)
 		message->uppercase_name = uppercase_dup(name);
 		wl_list_init(&message->arg_list);
 		message->arg_count = 0;
+		message->client_custom = client_custom;
 
 		if (strcmp(element_name, WAYLAND_NS "#request") == 0)
 			wl_list_insert(ctx->interface->request_list.prev,
@@ -347,9 +355,11 @@ emit_stubs(struct wl_list *message_list, struct interface *interface)
 	struct arg *a, *ret;
 	int has_destructor, has_destroy;
 
-	/* We provide a hand written functions for the display object */
-	if (strcmp(interface->name, "wl_display") == 0)
+	if (interface->client_custom) {
+		/* This interface is completely implemented by hand-written
+		   code */
 		return;
+	}
 
 	printf("static inline void\n"
 	       "%s_set_user_data(struct %s *%s, void *user_data)\n"
@@ -397,6 +407,11 @@ emit_stubs(struct wl_list *message_list, struct interface *interface)
 		return;
 
 	wl_list_for_each(m, message_list, link) {
+		if (m->client_custom) {
+			/* This method is handwritten */
+			continue;
+		}
+
 		ret = NULL;
 		wl_list_for_each(a, &m->arg_list, link) {
 			if (a->type == NEW_ID)
