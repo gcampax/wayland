@@ -1,3 +1,4 @@
+/* -*- mode: c; c-basic-offset: 8 -*- */
 /*
  * Copyright © 2008 Kristian Høgsberg
  *
@@ -74,6 +75,12 @@ struct wl_display {
 	void *global_handler_data;
 };
 
+struct wl_surface {
+	struct wl_proxy parent;
+	int width;
+	int height;
+};
+
 static int wl_debug = 0;
 
 static int
@@ -120,13 +127,13 @@ wl_display_remove_global_listener(struct wl_display *display,
 	free(listener);
 }
 
-WL_EXPORT struct wl_proxy *
-wl_proxy_create(struct wl_proxy *factory, const struct wl_interface *interface)
+static struct wl_proxy *
+wl_proxy_create_internal(struct wl_display *display, const struct wl_interface *interface,
+			 size_t proxy_size)
 {
 	struct wl_proxy *proxy;
-	struct wl_display *display = factory->display;
 
-	proxy = malloc(sizeof *proxy);
+	proxy = calloc(1, proxy_size);
 	if (proxy == NULL)
 		return NULL;
 
@@ -136,6 +143,14 @@ wl_proxy_create(struct wl_proxy *factory, const struct wl_interface *interface)
 	proxy->display = display;
 
 	return proxy;
+}
+
+WL_EXPORT struct wl_proxy *
+wl_proxy_create(struct wl_proxy *factory, const struct wl_interface *interface)
+{
+	return wl_proxy_create_internal (factory->display,
+					 interface,
+					 sizeof (struct wl_proxy));
 }
 
 WL_EXPORT void
@@ -519,4 +534,52 @@ WL_EXPORT void *
 wl_proxy_get_user_data(struct wl_proxy *proxy)
 {
 	return proxy->user_data;
+}
+
+static void
+wl_surface_handle_configure_notify(void *data,
+				   struct wl_surface *surface,
+				   uint32_t time,
+				   int32_t width,
+				   int32_t height,
+				   int32_t x,
+				   int32_t y)
+{
+	surface->width = width;
+	surface->height = height;
+}
+
+static struct wl_surface_listener size_listener = {
+	wl_surface_handle_configure_notify
+};
+
+WL_EXPORT struct wl_surface *
+wl_compositor_create_surface(struct wl_compositor *wl_compositor)
+{
+	struct wl_proxy *surface;
+	struct wl_display *display = ((struct wl_proxy *)wl_compositor)->display;
+
+	surface = wl_proxy_create_internal(display,
+					   &wl_surface_interface,
+					   sizeof (struct wl_surface));
+	if (!surface)
+		return NULL;
+
+	wl_surface_add_listener ((struct wl_surface*)surface,
+				 &size_listener, NULL);
+
+	wl_proxy_marshal((struct wl_proxy *) wl_compositor,
+			  WL_COMPOSITOR_CREATE_SURFACE, surface);
+
+	return (struct wl_surface *) surface;
+}
+
+WL_EXPORT void
+wl_surface_get_size(struct wl_surface *surface,
+		    int *width, int *height)
+{
+	if (width)
+		*width = surface->width;
+	if (height)
+		*height = surface->height;
 }

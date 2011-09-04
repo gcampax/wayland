@@ -93,6 +93,13 @@ uint32_t
 wl_display_get_global(struct wl_display *display,
 		      const char *interface, uint32_t version);
 
+struct wl_surface *
+wl_compositor_create_surface(struct wl_compositor *compositor);
+
+void
+wl_surface_get_size(struct wl_surface *surface,
+		    int *width, int *height);
+
 #ifdef  __cplusplus
 }
 #endif

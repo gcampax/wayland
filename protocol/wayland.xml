@@ -93,7 +93,7 @@
   <interface name="wl_compositor" version="1">
     <!-- Factory request for a surface objects. A surface is akin to a
          window. -->
-    <request name="create_surface">
+    <request name="create_surface" client:custom="yes">
       <arg name="id" type="new_id" interface="wl_surface"/>
     </request>
   </interface>
