@@ -29,6 +29,10 @@
 
 #include "wayland-util.h"
 
+#define WAYLAND_NS "http://wayland.freedesktop.org/protocol"
+#define WAYLAND_CLIENT_NS "http://wayland.freedesktop.org/protocol/client"
+#define WAYLAND_SERVER_NS "http://wayland.freedesktop.org/protocol/server"
+
 static int
 usage(int ret)
 {
@@ -163,15 +167,15 @@ start_element(void *data, const char *element_name, const char **atts)
 	}
 
 	ctx->character_data_length = 0;
-	if (strcmp(element_name, "protocol") == 0) {
+	if (strcmp(element_name, WAYLAND_NS "#protocol") == 0) {
 		if (name == NULL)
 			fail(ctx, "no protocol name given");
 
 		ctx->protocol->name = strdup(name);
 		ctx->protocol->uppercase_name = uppercase_dup(name);
-	} else if (strcmp(element_name, "copyright") == 0) {
+	} else if (strcmp(element_name, WAYLAND_NS "#copyright") == 0) {
 		
-	} else if (strcmp(element_name, "interface") == 0) {
+	} else if (strcmp(element_name, WAYLAND_NS "#interface") == 0) {
 		if (name == NULL)
 			fail(ctx, "no interface name given");
 
@@ -188,8 +192,8 @@ start_element(void *data, const char *element_name, const char **atts)
 		wl_list_insert(ctx->protocol->interface_list.prev,
 			       &interface->link);
 		ctx->interface = interface;
-	} else if (strcmp(element_name, "request") == 0 ||
-		   strcmp(element_name, "event") == 0) {
+	} else if (strcmp(element_name, WAYLAND_NS "#request") == 0 ||
+		   strcmp(element_name, WAYLAND_NS "#event") == 0) {
 		if (name == NULL)
 			fail(ctx, "no request name given");
 
@@ -199,7 +203,7 @@ start_element(void *data, const char *element_name, const char **atts)
 		wl_list_init(&message->arg_list);
 		message->arg_count = 0;
 
-		if (strcmp(element_name, "request") == 0)
+		if (strcmp(element_name, WAYLAND_NS "#request") == 0)
 			wl_list_insert(ctx->interface->request_list.prev,
 				       &message->link);
 		else
@@ -215,7 +219,7 @@ start_element(void *data, const char *element_name, const char **atts)
 			fail(ctx, "destroy request should be destructor type");
 
 		ctx->message = message;
-	} else if (strcmp(element_name, "arg") == 0) {
+	} else if (strcmp(element_name, WAYLAND_NS "#arg") == 0) {
 		arg = malloc(sizeof *arg);
 		arg->name = strdup(name);
 
@@ -245,7 +249,7 @@ start_element(void *data, const char *element_name, const char **atts)
 
 		wl_list_insert(ctx->message->arg_list.prev, &arg->link);
 		ctx->message->arg_count++;
-	} else if (strcmp(element_name, "enum") == 0) {
+	} else if (strcmp(element_name, WAYLAND_NS "#enum") == 0) {
 		if (name == NULL)
 			fail(ctx, "no enum name given");
 
@@ -258,7 +262,7 @@ start_element(void *data, const char *element_name, const char **atts)
 			       &enumeration->link);
 
 		ctx->enumeration = enumeration;
-	} else if (strcmp(element_name, "entry") == 0) {
+	} else if (strcmp(element_name, WAYLAND_NS "#entry") == 0) {
 		entry = malloc(sizeof *entry);
 		entry->name = strdup(name);
 		entry->uppercase_name = uppercase_dup(name);
@@ -273,7 +277,7 @@ end_element(void *data, const XML_Char *name)
 {
 	struct parse_context *ctx = data;
 
-	if (strcmp(name, "copyright") == 0) {
+	if (strcmp(name, WAYLAND_NS "#copyright") == 0) {
 		ctx->protocol->copyright =
 			strndup(ctx->character_data,
 				ctx->character_data_length);
@@ -825,7 +829,7 @@ int main(int argc, char *argv[])
 	ctx.protocol = &protocol;
 
 	ctx.filename = "<stdin>";
-	ctx.parser = XML_ParserCreate(NULL);
+	ctx.parser = XML_ParserCreateNS(NULL, '#');
 	XML_SetUserData(ctx.parser, &ctx);
 	if (ctx.parser == NULL) {
 		fprintf(stderr, "failed to create parser\n");
