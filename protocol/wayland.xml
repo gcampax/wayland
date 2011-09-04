@@ -157,13 +157,7 @@
   </interface>
 
   <interface name="wl_shell" version="1">
-    <request name="move">
-      <arg name="surface" type="object" interface="wl_surface"/>
-      <arg name="input_device" type="object" interface="wl_input_device"/>
-      <arg name="time" type="uint"/>
-    </request>
-
-    <enum name="resize">
+    <enum name="resize_operation">
       <entry name="none" value="0"/>
       <entry name="top" value="1"/>
       <entry name="bottom" value="2"/>
@@ -175,12 +169,31 @@
       <entry name="bottom_right" value="10"/>
     </enum>
 
-    <request name="resize">
+    <request name="start_move_resize">
       <arg name="surface" type="object" interface="wl_surface"/>
       <arg name="input_device" type="object" interface="wl_input_device"/>
       <arg name="time" type="uint"/>
       <!-- edges is an enum, need to get the values in here -->
-      <arg name="edges" type="uint"/>
+      <arg name="resize_edges" type="uint"/>
+    </request>
+
+    <enum name="restack_operation">
+      <entry name="top" value="0"/>
+      <entry name="bottom" value="1"/>
+      <entry name="above" value="2"/>
+      <entry name="below" value="3"/>
+    </enum>
+
+    <request name="restack">
+      <arg name="surface" type="object" interface="wl_surface"/>
+      <arg name="operation" type="uint"/>
+      <arg name="sibling" type="object" interface="wl_surface"/>
+    </request>
+
+    <request name="move">
+      <arg name="surface" type="object" interface="wl_surface"/>
+      <arg name="x" type="uint"/>
+      <arg name="y" type="uint"/>
     </request>
 
     <request name="create_drag">
@@ -223,20 +236,6 @@
     <request name="set_fullscreen">
       <arg name="surface" type="object" interface="wl_surface"/>
     </request>
-
-    <!-- The configure event asks the client to resize its surface.
-         The size is a hint, in the sense that the client is free to
-         ignore it if it doesn't resize, pick a smaller size (to
-         satisfy aspect ration or resize in steps of NxM pixels).  The
-         client is free to dismiss all but the last configure event it
-         received. -->
-    <event name="configure">
-      <arg name="time" type="uint"/>
-      <arg name="edges" type="uint"/>
-      <arg name="surface" type="object" interface="wl_surface"/>
-      <arg name="width" type="int"/>
-      <arg name="height" type="int"/>
-    </event>
   </interface>
 
   <interface name="wl_selection" version="1">
@@ -387,7 +386,7 @@
 
     <!-- Copy the contents of a buffer into this surface. The x and y
          arguments specify the location of the new buffers upper left
-         corner, relative to the old buffers upper left corner. -->
+         corner, relative to the upper left corner of the surface -->
     <request name="attach">
       <arg name="buffer" type="object" interface="wl_buffer"/>
       <arg name="x" type="int"/>
@@ -413,6 +412,47 @@
       <arg name="callback" type="new_id" interface="wl_callback"/>
     </request>
 
+    <enum name="gravity">
+      <entry name="static" value="0"/>
+      <entry name="top_left" value="1"/>
+      <entry name="top_right" value="2"/>
+      <entry name="bottom_right" value="3"/>
+      <entry name="bottom_left" value="4"/>
+      <entry name="center" value="5"/>
+    </enum>
+
+    <!-- The configure request asks the compositor to resize the surface
+         programmatically (for example because its content changed). The
+	 gravity argument specifies how to position the surface, and in
+	 particular indicates a reference point that will be kept in the
+	 same place in the screen after resizing. A value of static is not
+	 used and is equivalent to topleft.
+	 The compositor is free to ignore the new size or the gravity hint,
+	 but must at all times emit a configure_notify event reporting the
+	 real size and position of the surface. -->
+    <request name="configure">
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+      <arg name="gravity" type="uint"/>
+    </request>
+
+    <!-- The configure_notify event communicates to the client the new
+	 size of the surface, after resizing performed by the compositor
+	 or as a result of a configure request. The position coordinates
+	 are allowed to be 0,0 if the compositor is unable to do otherwise
+	 (for example because it is transforming the window), but should
+	 reflect the delta between surface coords and root coords in
+	 pointer events.
+	 The client is free to dismiss all but the last configure_notify
+	 event it received, and should do so if it has emitted a configure
+	 request at a later time. -->
+    <event name="configure_notify">
+      <arg name="time" type="uint"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+    </event>
   </interface>
 
 
