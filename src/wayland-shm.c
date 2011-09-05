@@ -1,3 +1,4 @@
+/* -*- mode: c; c-basic-offset: 8 -*- */
 /*
  * Copyright © 2008 Kristian Høgsberg
  *
@@ -98,10 +99,8 @@ wl_shm_buffer_init(struct wl_shm *shm, struct wl_client *client, uint32_t id,
 
 	buffer->buffer.resource.object.id = id;
 	buffer->buffer.resource.object.interface = &wl_buffer_interface;
-	buffer->buffer.resource.object.implementation = (void (**)(void))
-		&shm_buffer_interface;
-
-	buffer->buffer.resource.data = buffer;
+	buffer->buffer.resource.implementation = (void (**) (void)) &shm_buffer_interface;
+	buffer->buffer.resource.data = data;
 	buffer->buffer.resource.client = client;
 	buffer->buffer.resource.destroy = destroy_buffer;
 
@@ -218,8 +217,7 @@ wl_shm_finish(struct wl_shm *shm)
 WL_EXPORT int
 wl_buffer_is_shm(struct wl_buffer *buffer)
 {
-	return buffer->resource.object.implementation == 
-		(void (**)(void)) &shm_buffer_interface;
+	return buffer->resource.implementation == (void (**)(void)) &shm_buffer_interface;
 }
 
 WL_EXPORT int32_t

@@ -46,12 +46,6 @@ struct wl_global_listener {
 	struct wl_list link;
 };
 
-struct wl_proxy {
-	struct wl_object object;
-	struct wl_display *display;
-	void *user_data;
-};
-
 struct wl_global {
 	uint32_t id;
 	char *interface;
@@ -138,25 +132,24 @@ wl_proxy_create_internal(struct wl_display *display, const struct wl_interface *
 		return NULL;
 
 	proxy->object.interface = interface;
-	proxy->object.implementation = NULL;
+	wl_list_init(&proxy->listener_list);
 	proxy->object.id = wl_map_insert_new(&display->objects, proxy);
 	proxy->display = display;
 
 	return proxy;
 }
 
-WL_EXPORT struct wl_proxy *
-wl_proxy_create(struct wl_proxy *factory, const struct wl_interface *interface)
-{
-	return wl_proxy_create_internal (factory->display,
-					 interface,
-					 sizeof (struct wl_proxy));
-}
-
 WL_EXPORT void
 wl_proxy_destroy(struct wl_proxy *proxy)
 {
+	struct wl_listener *listener, *lnext;
+
 	wl_map_remove(&proxy->display->objects, proxy->object.id);
+
+	wl_list_for_each_safe(listener, lnext,
+			      &proxy->listener_list, link)
+		free(listener);
+
 	free(proxy);
 }
 
@@ -164,13 +157,11 @@ WL_EXPORT int
 wl_proxy_add_listener(struct wl_proxy *proxy,
 		      void (**implementation)(void), void *data)
 {
-	if (proxy->object.implementation) {
-		fprintf(stderr, "proxy already has listener\n");
-		return -1;
-	}
+	struct wl_listener *impl = malloc(sizeof (struct wl_listener));
 
-	proxy->object.implementation = implementation;
-	proxy->user_data = data;
+	impl->callbacks = implementation;
+	impl->user_data = data;
+	wl_list_insert(proxy->listener_list.prev, &impl->link);
 
 	return 0;
 }
@@ -305,6 +296,7 @@ WL_EXPORT struct wl_display *
 wl_display_connect(const char *name)
 {
 	struct wl_display *display;
+	struct wl_listener *impl;
 	const char *debug;
 	char *connection, *end;
 	int flags;
@@ -342,8 +334,11 @@ wl_display_connect(const char *name)
 	display->proxy.object.interface = &wl_display_interface;
 	display->proxy.object.id = wl_map_insert_new(&display->objects, display);
 	display->proxy.display = display;
-	display->proxy.object.implementation = (void(**)(void)) &display_listener;
-	display->proxy.user_data = display;
+	wl_list_init(&display->proxy.listener_list);
+	impl = malloc(sizeof (struct wl_listener));
+	impl->callbacks = (void(**)(void)) &display_listener;
+	impl->user_data = display;
+	wl_list_insert(&display->proxy.listener_list, &impl->link);
 
 	display->connection = wl_connection_create(display->fd,
 						   connection_update, display);
@@ -362,6 +357,7 @@ wl_display_destroy(struct wl_display *display)
 {
 	struct wl_global *global, *gnext;
 	struct wl_global_listener *listener, *lnext;
+	struct wl_listener *impl_listener, *inext;
 
 	wl_connection_destroy(display->connection);
 	wl_map_release(&display->objects);
@@ -371,6 +367,9 @@ wl_display_destroy(struct wl_display *display)
 	wl_list_for_each_safe(listener, lnext,
 			      &display->global_listener_list, link)
 		free(listener);
+	wl_list_for_each_safe(impl_listener, inext,
+			      &display->proxy.listener_list, link)
+		free(impl_listener);
 
 	close(display->fd);
 	free(display);
@@ -422,12 +421,13 @@ handle_event(struct wl_display *display,
 	uint32_t p[32];
 	struct wl_proxy *proxy;
 	struct wl_closure *closure;
+	struct wl_listener *impl;
 	const struct wl_message *message;
 
 	wl_connection_copy(display->connection, p, size);
 	proxy = wl_map_lookup(&display->objects, id);
 
-	if (proxy == NULL || proxy->object.implementation == NULL) {
+	if (proxy == NULL || wl_list_empty(&proxy->listener_list)) {
 		wl_connection_consume(display->connection, size);
 		return;
 	}
@@ -444,9 +444,11 @@ handle_event(struct wl_display *display,
 	if (wl_debug)
 		wl_closure_print(closure, &proxy->object, false);
 
-	wl_closure_invoke(closure, &proxy->object,
-			  proxy->object.implementation[opcode],
-			  proxy->user_data);
+	wl_list_for_each(impl, &proxy->listener_list, link) {
+		if (impl->callbacks[opcode] != NULL)
+			wl_closure_invoke(closure, &proxy->object,
+					  impl->callbacks[opcode], impl->user_data);
+	}
 
 	wl_closure_destroy(closure);
 }

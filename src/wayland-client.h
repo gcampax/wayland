@@ -1,3 +1,4 @@
+/* -*- mode: c; c-basic-offset: 8 -*- */
 /*
  * Copyright © 2008 Kristian Høgsberg
  *
@@ -29,15 +30,26 @@
 extern "C" {
 #endif
 
-struct wl_proxy;
 struct wl_display;
 
+struct wl_listener {
+	void (**callbacks)(void);
+	void *user_data;
+	struct wl_list link;
+};
+
+struct wl_proxy {
+	/*< private >*/
+	struct wl_object object;
+	struct wl_list listener_list;
+	struct wl_display *display;
+	void *user_data;
+};
+
 void wl_proxy_marshal(struct wl_proxy *p, uint32_t opcode, ...);
-struct wl_proxy *wl_proxy_create(struct wl_proxy *factory,
-				 const struct wl_interface *interface);
-struct wl_proxy *wl_proxy_create_for_id(struct wl_display *display,
-					const struct wl_interface *interface,
-					uint32_t id);
+struct wl_proxy *wl_proxy_create(struct wl_display *display,
+				 const struct wl_interface *interface,
+				 size_t proxy_size);
 void wl_proxy_destroy(struct wl_proxy *proxy);
 int wl_proxy_add_listener(struct wl_proxy *proxy,
 			  void (**implementation)(void), void *data);

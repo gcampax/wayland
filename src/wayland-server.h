@@ -1,3 +1,4 @@
+/* -*- mode: c; c-basic-offset: 8; -*- */
 /*
  * Copyright © 2008 Kristian Høgsberg
  *
@@ -107,6 +108,7 @@ wl_client_add_object(struct wl_client *client,
 
 struct wl_resource {
 	struct wl_object object;
+	void (*const *implementation) (void);
 	void (*destroy)(struct wl_resource *resource);
 	struct wl_list link;
 	struct wl_list destroy_listener_list;

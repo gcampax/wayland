@@ -1,3 +1,4 @@
+/* -*- mode: c; c-basic-offset: 8 -*- */
 /*
  * Copyright © 2008 Kristian Høgsberg
  *
@@ -57,12 +58,6 @@ struct wl_interface {
 	const struct wl_message *methods;
 	int event_count;
 	const struct wl_message *events;
-};
-
-struct wl_object {
-	const struct wl_interface *interface;
-	void (* const * implementation)(void);
-	uint32_t id;
 };
 
 typedef void (*wl_iterator_func_t)(void *element, void *data);
@@ -161,6 +156,11 @@ int wl_map_insert_at(struct wl_map *map, uint32_t i, void *data);
 void wl_map_remove(struct wl_map *map, uint32_t i);
 void *wl_map_lookup(struct wl_map *map, uint32_t i);
 void wl_map_for_each(struct wl_map *map, wl_iterator_func_t func, void *data);
+
+struct wl_object {
+	const struct wl_interface *interface;
+	uint32_t id;
+};
 
 #ifdef  __cplusplus
 }

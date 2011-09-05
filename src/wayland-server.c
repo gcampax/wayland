@@ -1,3 +1,4 @@
+/* -*- mode: c; c-basic-offset: 8 -*- */
 /*
  * Copyright © 2008 Kristian Høgsberg
  *
@@ -196,7 +197,7 @@ wl_client_connection_data(int fd, uint32_t mask, void *data)
 			wl_closure_print(closure, object, false); 
 
 		wl_closure_invoke(closure, object,
-				  object->implementation[opcode], client);
+				  (void (*)(void))resource->implementation[opcode], client);
 
 		wl_closure_destroy(closure);
 
@@ -832,8 +833,8 @@ wl_client_add_object(struct wl_client *client,
 	}
 
 	resource->object.interface = interface;
-	resource->object.implementation = implementation;
 	resource->object.id = id;
+	resource->implementation = implementation;
 	resource->client = client;
 	resource->data = data;
 	resource->destroy = (void *) free;
