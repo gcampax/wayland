@@ -22,6 +22,7 @@
  * OF THIS SOFTWARE.
  */
 
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
@@ -131,12 +132,47 @@ uppercase_dup(const char *src)
 	return u;
 }
 
+static void fail(struct parse_context *ctx, const char *msg) __attribute__((noreturn));
+
 static void
 fail(struct parse_context *ctx, const char *msg)
 {
 	fprintf(stderr, "%s:%ld: %s\n",
 		ctx->filename, XML_GetCurrentLineNumber(ctx->parser), msg);
 	exit(EXIT_FAILURE);
+}
+
+static struct arg*
+make_arg(struct parse_context *ctx, const char *name, const char *type, const char *interface_name)
+{
+	struct arg* arg = malloc(sizeof *arg);
+	arg->name = strdup(name);
+
+	if (strcmp(type, "int") == 0)
+		arg->type = INT;
+	else if (strcmp(type, "uint") == 0)
+		arg->type = UNSIGNED;
+	else if (strcmp(type, "string") == 0)
+		arg->type = STRING;
+	else if (strcmp(type, "array") == 0)
+		arg->type = ARRAY;
+	else if (strcmp(type, "fd") == 0)
+		arg->type = FD;
+	else if (strcmp(type, "new_id") == 0) {
+		if (interface_name == NULL)
+			fail(ctx, "no interface name given");
+		arg->type = NEW_ID;
+		arg->interface_name = strdup(interface_name);
+	} else if (strcmp(type, "object") == 0) {
+		if (interface_name == NULL)
+			fail(ctx, "no interface name given");
+		arg->type = OBJECT;
+		arg->interface_name = strdup(interface_name);
+	} else {
+		fail(ctx, "unknown type");
+	}
+
+	return arg;
 }
 
 static void
@@ -150,6 +186,7 @@ start_element(void *data, const char *element_name, const char **atts)
 	struct entry *entry;
 	const char *name, *type, *interface_name, *value;
 	int i, version, client_custom;
+	int change_notify, writable;
 
 	name = NULL;
 	type = NULL;
@@ -157,6 +194,8 @@ start_element(void *data, const char *element_name, const char **atts)
 	interface_name = NULL;
 	value = NULL;
 	client_custom = 0;
+	writable = 0;
+	change_notify = 0;
 	for (i = 0; atts[i]; i += 2) {
 		if (strcmp(atts[i], "name") == 0)
 			name = atts[i + 1];
@@ -168,6 +207,10 @@ start_element(void *data, const char *element_name, const char **atts)
 			value = atts[i + 1];
 		if (strcmp(atts[i], "interface") == 0)
 			interface_name = atts[i + 1];
+		if (strcmp(atts[i], "change-notify") == 0)
+			change_notify = (strcmp(atts[i + 1], "yes") == 0);
+		if (strcmp(atts[i], "writable") == 0)
+			writable = (strcmp(atts[i + 1], "yes") == 0);
 		if (strcmp(atts[i], WAYLAND_CLIENT_NS "#custom") == 0)
 			client_custom = (strcmp(atts[i + 1], "yes") == 0);
 	}
@@ -227,33 +270,61 @@ start_element(void *data, const char *element_name, const char **atts)
 			fail(ctx, "destroy request should be destructor type");
 
 		ctx->message = message;
-	} else if (strcmp(element_name, WAYLAND_NS "#arg") == 0) {
-		arg = malloc(sizeof *arg);
-		arg->name = strdup(name);
+	} else if (strcmp(element_name, WAYLAND_NS "#property") == 0) {
+		if (name == NULL)
+			fail(ctx, "no property name given");
 
-		if (strcmp(type, "int") == 0)
-			arg->type = INT;
-		else if (strcmp(type, "uint") == 0)
-			arg->type = UNSIGNED;
-		else if (strcmp(type, "string") == 0)
-			arg->type = STRING;
-		else if (strcmp(type, "array") == 0)
-			arg->type = ARRAY;
-		else if (strcmp(type, "fd") == 0)
-			arg->type = FD;
-		else if (strcmp(type, "new_id") == 0) {
-			if (interface_name == NULL)
-				fail(ctx, "no interface name given");
-			arg->type = NEW_ID;
-			arg->interface_name = strdup(interface_name);
-		} else if (strcmp(type, "object") == 0) {
-			if (interface_name == NULL)
-				fail(ctx, "no interface name given");
-			arg->type = OBJECT;
-			arg->interface_name = strdup(interface_name);
-		} else {
-			fail(ctx, "unknown type");
+		if (writable) {
+			message = malloc(sizeof *message);
+			asprintf(&message->name, "set_%s", name);
+			message->uppercase_name = uppercase_dup(message->name);
+			wl_list_init(&message->arg_list);
+
+			if (strcmp(type, "flags") == 0) {
+				/* flags use two arguments, a change mask
+				   and the new value */
+				message->arg_count = 2;
+
+				arg = make_arg(ctx, "value", "uint", NULL);
+				wl_list_insert(message->arg_list.prev, &arg->link);
+
+				arg = make_arg(ctx, "change_mask", "uint", NULL);
+				wl_list_insert(message->arg_list.prev, &arg->link);
+			} else {
+				message->arg_count = 1;
+
+				arg = make_arg(ctx, "value", type, interface_name);
+				wl_list_insert(message->arg_list.prev, &arg->link);
+			}
+
+			wl_list_insert(ctx->interface->request_list.prev, &message->link);
 		}
+
+		if (change_notify) {
+			message = malloc(sizeof *message);
+			asprintf(&message->name, "%s_notify", name);
+			message->uppercase_name = uppercase_dup(message->name);
+			wl_list_init(&message->arg_list);
+
+			if (strcmp(type, "flags") == 0) {
+				message->arg_count = 2;
+
+				arg = make_arg(ctx, "value", "uint", NULL);
+				wl_list_insert(message->arg_list.prev, &arg->link);
+
+				arg = make_arg(ctx, "change_mask", "uint", NULL);
+				wl_list_insert(message->arg_list.prev, &arg->link);
+			} else {
+				message->arg_count = 1;
+
+				arg = make_arg(ctx, "value", type, interface_name);
+				wl_list_insert(message->arg_list.prev, &arg->link);
+			}
+
+			wl_list_insert(ctx->interface->event_list.prev, &message->link);
+		}
+	} else if (strcmp(element_name, WAYLAND_NS "#arg") == 0) {
+		arg = make_arg(ctx, name, type, interface_name);
 
 		wl_list_insert(ctx->message->arg_list.prev, &arg->link);
 		ctx->message->arg_count++;
