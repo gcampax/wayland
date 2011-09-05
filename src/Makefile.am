@@ -7,6 +7,7 @@ include_HEADERS =				\
 	wayland-server.h			\
 	wayland-client-protocol.h		\
 	wayland-client.h			\
+	wayland-client-private.h		\
 	wayland-egl.h
 
 libwayland_util_la_SOURCES =			\
@@ -58,6 +59,7 @@ endif
 BUILT_SOURCES =					\
 	wayland-server-protocol.h		\
 	wayland-client-protocol.h		\
+	wayland-client-protocol.c		\
 	wayland-protocol.c
 
 CLEANFILES = $(BUILT_SOURCES)

@@ -39,6 +39,9 @@
 #include "connection.h"
 #include "wayland-util.h"
 #include "wayland-client.h"
+#include "wayland-client-private.h"
+
+#include "wayland-client-protocol.c"
 
 struct wl_global_listener {
 	wl_display_global_func_t handler;
@@ -69,8 +72,8 @@ struct wl_display {
 	void *global_handler_data;
 };
 
-struct wl_surface {
-	struct wl_proxy parent;
+struct wl_real_surface {
+	struct wl_surface parent;
 	int width;
 	int height;
 };
@@ -121,9 +124,9 @@ wl_display_remove_global_listener(struct wl_display *display,
 	free(listener);
 }
 
-static struct wl_proxy *
-wl_proxy_create_internal(struct wl_display *display, const struct wl_interface *interface,
-			 size_t proxy_size)
+WL_EXPORT struct wl_proxy *
+wl_proxy_create(struct wl_display *display, const struct wl_interface *interface,
+		size_t proxy_size)
 {
 	struct wl_proxy *proxy;
 
@@ -497,11 +500,12 @@ wl_display_flush(struct wl_display *display)
 
 WL_EXPORT void *
 wl_display_bind(struct wl_display *display,
-		uint32_t name, const struct wl_interface *interface)
+		uint32_t name, const struct wl_interface *interface,
+		size_t proxy_size)
 {
 	struct wl_proxy *proxy;
 
-	proxy = wl_proxy_create(&display->proxy, interface);
+	proxy = wl_proxy_create(display, interface, proxy_size);
 	if (proxy == NULL)
 		return NULL;
 
@@ -514,16 +518,15 @@ wl_display_bind(struct wl_display *display,
 WL_EXPORT struct wl_callback *
 wl_display_sync(struct wl_display *display)
 {
-	struct wl_proxy *proxy;
+	struct wl_callback *callback;
 
-	proxy = wl_proxy_create(&display->proxy, &wl_callback_interface);
-
-	if (!proxy)
+	callback = _wl_callback_proxy_create(display);
+	if (!callback)
 		return NULL;
 
-	wl_proxy_marshal(&display->proxy, WL_DISPLAY_SYNC, proxy);
+	wl_proxy_marshal(&display->proxy, WL_DISPLAY_SYNC, callback);
 
-	return (struct wl_callback *) proxy;
+	return callback;
 }
 
 WL_EXPORT void
@@ -547,8 +550,10 @@ wl_surface_handle_configure_notify(void *data,
 				   int32_t x,
 				   int32_t y)
 {
-	surface->width = width;
-	surface->height = height;
+	struct wl_real_surface *real_surface = (struct wl_real_surface*) surface;
+
+	real_surface->width = width;
+	real_surface->height = height;
 }
 
 static struct wl_surface_listener size_listener = {
@@ -561,12 +566,14 @@ wl_compositor_create_surface(struct wl_compositor *wl_compositor)
 	struct wl_proxy *surface;
 	struct wl_display *display = ((struct wl_proxy *)wl_compositor)->display;
 
-	surface = wl_proxy_create_internal(display,
-					   &wl_surface_interface,
-					   sizeof (struct wl_surface));
+	surface = wl_proxy_create(display,
+				  &wl_surface_interface,
+				  sizeof (struct wl_real_surface));
 	if (!surface)
 		return NULL;
 
+	wl_surface_add_listener ((struct wl_surface*)surface,
+				 &wl_surface_property_listener, NULL);
 	wl_surface_add_listener ((struct wl_surface*)surface,
 				 &size_listener, NULL);
 
@@ -580,8 +587,10 @@ WL_EXPORT void
 wl_surface_get_size(struct wl_surface *surface,
 		    int *width, int *height)
 {
+	struct wl_real_surface *real_surface = (struct wl_real_surface*) surface;
+
 	if (width)
-		*width = surface->width;
+		*width = real_surface->width;
 	if (height)
-		*height = surface->height;
+		*height = real_surface->height;
 }

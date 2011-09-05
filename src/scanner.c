@@ -58,9 +58,11 @@ struct interface {
 	char *uppercase_name;
 	int version;
 	int client_custom;
+	int client_global;
 	struct wl_list request_list;
 	struct wl_list event_list;
 	struct wl_list enumeration_list;
+	struct wl_list property_list;
 	struct wl_list link;
 };
 
@@ -69,6 +71,7 @@ struct message {
 	char *uppercase_name;
 	struct wl_list arg_list;
 	struct wl_list link;
+	struct property *property;
 	int arg_count;
 	int type_index;
 	int all_null;
@@ -77,13 +80,24 @@ struct message {
 };
 
 enum arg_type {
+	INVALID,
 	NEW_ID,
 	INT,
 	UNSIGNED,
 	STRING,
 	OBJECT,
 	ARRAY,
+	FLAGS,
 	FD
+};
+
+struct property {
+	char *name;
+	char *uppercase_name;
+	enum arg_type type;
+	int writable;
+	int change_notify;
+	struct wl_list link;
 };
 
 struct arg {
@@ -142,23 +156,32 @@ fail(struct parse_context *ctx, const char *msg)
 	exit(EXIT_FAILURE);
 }
 
+static enum arg_type
+type_from_string(const char *type) {
+	if (strcmp(type, "int") == 0)
+		return INT;
+	else if (strcmp(type, "uint") == 0)
+		return UNSIGNED;
+	else if (strcmp(type, "string") == 0)
+		return STRING;
+	else if (strcmp(type, "array") == 0)
+		return ARRAY;
+	else if (strcmp(type, "fd") == 0)
+		return FD;
+	else
+		return INVALID;
+}
+
 static struct arg*
 make_arg(struct parse_context *ctx, const char *name, const char *type, const char *interface_name)
 {
 	struct arg* arg = malloc(sizeof *arg);
 	arg->name = strdup(name);
 
-	if (strcmp(type, "int") == 0)
-		arg->type = INT;
-	else if (strcmp(type, "uint") == 0)
-		arg->type = UNSIGNED;
-	else if (strcmp(type, "string") == 0)
-		arg->type = STRING;
-	else if (strcmp(type, "array") == 0)
-		arg->type = ARRAY;
-	else if (strcmp(type, "fd") == 0)
-		arg->type = FD;
-	else if (strcmp(type, "new_id") == 0) {
+	arg->type = type_from_string(type);
+	if (arg->type != INVALID) {
+		return arg;
+	} else if (strcmp(type, "new_id") == 0) {
 		if (interface_name == NULL)
 			fail(ctx, "no interface name given");
 		arg->type = NEW_ID;
@@ -184,8 +207,9 @@ start_element(void *data, const char *element_name, const char **atts)
 	struct arg *arg;
 	struct enumeration *enumeration;
 	struct entry *entry;
+	struct property *property;
 	const char *name, *type, *interface_name, *value;
-	int i, version, client_custom;
+	int i, version, client_custom, client_global;
 	int change_notify, writable;
 
 	name = NULL;
@@ -194,6 +218,7 @@ start_element(void *data, const char *element_name, const char **atts)
 	interface_name = NULL;
 	value = NULL;
 	client_custom = 0;
+	client_global = 0;
 	writable = 0;
 	change_notify = 0;
 	for (i = 0; atts[i]; i += 2) {
@@ -213,6 +238,8 @@ start_element(void *data, const char *element_name, const char **atts)
 			writable = (strcmp(atts[i + 1], "yes") == 0);
 		if (strcmp(atts[i], WAYLAND_CLIENT_NS "#custom") == 0)
 			client_custom = (strcmp(atts[i + 1], "yes") == 0);
+		if (strcmp(atts[i], WAYLAND_CLIENT_NS "#global") == 0)
+			client_global = (strcmp(atts[i + 1], "yes") == 0);
 	}
 
 	ctx->character_data_length = 0;
@@ -236,9 +263,11 @@ start_element(void *data, const char *element_name, const char **atts)
 		interface->uppercase_name = uppercase_dup(name);
 		interface->version = version;
 		interface->client_custom = client_custom;
+		interface->client_global = client_global;
 		wl_list_init(&interface->request_list);
 		wl_list_init(&interface->event_list);
 		wl_list_init(&interface->enumeration_list);
+		wl_list_init(&interface->property_list);
 		wl_list_insert(ctx->protocol->interface_list.prev,
 			       &interface->link);
 		ctx->interface = interface;
@@ -252,6 +281,7 @@ start_element(void *data, const char *element_name, const char **atts)
 		message->uppercase_name = uppercase_dup(name);
 		wl_list_init(&message->arg_list);
 		message->arg_count = 0;
+		message->property = NULL;
 		message->client_custom = client_custom;
 
 		if (strcmp(element_name, WAYLAND_NS "#request") == 0)
@@ -274,13 +304,25 @@ start_element(void *data, const char *element_name, const char **atts)
 		if (name == NULL)
 			fail(ctx, "no property name given");
 
+		property = malloc(sizeof *property);
+		property->name = strdup(name);
+		property->uppercase_name = uppercase_dup(name);
+		property->writable = writable;
+		property->change_notify = change_notify;
+		if (strcmp(type, "flags") == 0)
+			property->type = FLAGS;
+		else
+			property->type = type_from_string(type);
+		wl_list_insert(ctx->interface->property_list.prev, &property->link);
+
 		if (writable) {
 			message = malloc(sizeof *message);
 			asprintf(&message->name, "set_%s", name);
 			message->uppercase_name = uppercase_dup(message->name);
+			message->property = property;
 			wl_list_init(&message->arg_list);
 
-			if (strcmp(type, "flags") == 0) {
+			if (property->type == FLAGS) {
 				/* flags use two arguments, a change mask
 				   and the new value */
 				message->arg_count = 2;
@@ -304,9 +346,10 @@ start_element(void *data, const char *element_name, const char **atts)
 			message = malloc(sizeof *message);
 			asprintf(&message->name, "%s_notify", name);
 			message->uppercase_name = uppercase_dup(message->name);
+			message->property = property;
 			wl_list_init(&message->arg_list);
 
-			if (strcmp(type, "flags") == 0) {
+			if (property->type == FLAGS) {
 				message->arg_count = 2;
 
 				arg = make_arg(ctx, "value", "uint", NULL);
@@ -395,28 +438,40 @@ emit_opcodes(struct wl_list *message_list, struct interface *interface)
 }
 
 static void
-emit_type(struct arg *a)
+emit_simple_type(enum arg_type type, int is_const)
 {
-	switch (a->type) {
-	default:
+	switch (type) {
+	case INVALID:
+	case OBJECT:
+		printf("void *");
 	case INT:
 	case FD:
 		printf("int32_t ");
 		break;
 	case NEW_ID:
 	case UNSIGNED:
+	case FLAGS:
 		printf("uint32_t ");
 		break;
 	case STRING:
-		printf("const char *");
-		break;
-	case OBJECT:
-		printf("struct %s *", a->interface_name);
+		if (is_const)
+			printf("const char *");
+		else
+			printf("char *");
 		break;
 	case ARRAY:
 		printf("struct wl_array *");
 		break;
 	}
+}
+
+static void
+emit_type(struct arg *a)
+{
+	if (a->type == OBJECT)
+		printf("struct %s *", a->interface_name);
+	else
+		emit_simple_type(a->type, 1);
 }
 
 static void
@@ -453,7 +508,7 @@ emit_stubs(struct wl_list *message_list, struct interface *interface)
 	wl_list_for_each(m, message_list, link) {
 		if (m->destructor)
 			has_destructor = 1;
-		if (strcmp(m->name, "destroy)") == 0)
+		if (strcmp(m->name, "destroy") == 0)
 			has_destroy = 1;
 	}
 
@@ -464,22 +519,24 @@ emit_stubs(struct wl_list *message_list, struct interface *interface)
 		exit(EXIT_FAILURE);
 	}
 
-	if (!has_destructor)
-		printf("static inline void\n"
-		       "%s_destroy(struct %s *%s)\n"
-		       "{\n"
-		       "\twl_proxy_destroy("
-		       "(struct wl_proxy *) %s);\n"
-		       "}\n\n",
-		       interface->name, interface->name, interface->name,
-		       interface->name);
+	if (!has_destructor) {
+		printf("void %s_destroy(struct %s *%s);\n\n",
+		       interface->name, interface->name, interface->name);
+	} else {
+		printf("void _%s_proxy_destroy(struct %s *%s);\n\n",
+		       interface->name, interface->name, interface->name);
+	}
 
 	if (wl_list_empty(message_list))
 		return;
 
 	wl_list_for_each(m, message_list, link) {
 		if (m->client_custom) {
-			/* This method is handwritten */
+			/* This method is hand written. */
+			continue;
+		}
+		if (m->property != NULL) {
+			/* Properties are handled later. */
 			continue;
 		}
 
@@ -489,11 +546,14 @@ emit_stubs(struct wl_list *message_list, struct interface *interface)
 				ret = a;
 		}
 
+		if (!m->client_custom)
+			printf("static inline ");
+
 		if (ret)
-			printf("static inline struct %s *\n",
+			printf("struct %s *\n",
 			       ret->interface_name);
 		else
-			printf("static inline void\n");
+			printf("void\n");
 
 		printf("%s_%s(struct %s *%s",
 		       interface->name, m->name,
@@ -509,17 +569,18 @@ emit_stubs(struct wl_list *message_list, struct interface *interface)
 
 		printf(")\n"
 		       "{\n");
+
 		if (ret)
-			printf("\tstruct wl_proxy *%s;\n\n"
-			       "\t%s = wl_proxy_create("
-			       "(struct wl_proxy *) %s,\n"
-			       "\t\t\t     &%s_interface);\n"
+			printf("\tstruct %s *%s;\n\n"
+			       "\t%s = _%s_proxy_create("
+			       "wl_proxy_get_display((struct wl_proxy *) %s));\n"
 			       "\tif (!%s)\n"
 			       "\t\treturn NULL;\n\n",
+			       ret->interface_name,
 			       ret->name,
 			       ret->name,
-			       interface->name, ret->interface_name,
-			       ret->name);
+			       ret->interface_name,
+			       interface->name, ret->name);
 
 		printf("\twl_proxy_marshal((struct wl_proxy *) %s,\n"
 		       "\t\t\t %s_%s",
@@ -534,9 +595,7 @@ emit_stubs(struct wl_list *message_list, struct interface *interface)
 		printf(");\n");
 
 		if (m->destructor)
-			printf("\n\twl_proxy_destroy("
-			       "(struct wl_proxy *) %s);\n",
-			       interface->name);
+			printf("\t_%s_proxy_destroy(%s);\n", interface->name, interface->name);
 
 		if (ret)
 			printf("\n\treturn (struct %s *) %s;\n",
@@ -586,10 +645,34 @@ emit_enumerations(struct interface *interface)
 }
 
 static void
+emit_object_struct(struct interface *interface)
+{
+	struct property *p;
+
+	if (interface->client_custom)
+		return;
+
+	printf("struct %s {\n"
+	       "\tstruct wl_proxy parent;\n",
+	       interface->name);
+
+	wl_list_for_each(p, &interface->property_list, link) {
+		printf("\t");
+		if (p->type == FLAGS)
+			emit_simple_type(UNSIGNED, 0);
+		else
+			emit_simple_type(p->type, 0);
+		printf("%s;\n", p->name);
+	}
+	printf("};\n\n");
+}
+
+static void
 emit_structs(struct wl_list *message_list, struct interface *interface)
 {
 	struct message *m;
 	struct arg *a;
+	struct property *p;
 	int is_interface, n;
 
 	if (wl_list_empty(message_list))
@@ -642,6 +725,20 @@ emit_structs(struct wl_list *message_list, struct interface *interface)
 		   interface->name,
 		   interface->name,
 		   indent(37));
+
+	    wl_list_for_each(p, &interface->property_list, link) {
+		    emit_simple_type(p->type, 1);
+		    printf("%s_get_%s(struct %s* %s);\n",
+			   interface->name, p->name, interface->name, interface->name);
+
+		    if (p->writable) {
+			    printf("void %s_set_%s(struct %s* %s, ",
+				   interface->name, p->name, interface->name, interface->name);
+			    emit_simple_type(p->type, 1);
+			    printf("value);\n");
+		    }
+		    printf("\n");
+	    }
 	}
 }
 
@@ -692,8 +789,9 @@ emit_header(struct protocol *protocol, int server)
 	       protocol->uppercase_name, s,
 	       protocol->uppercase_name, s);
 
-	wl_list_for_each(i, &protocol->interface_list, link)
+	wl_list_for_each(i, &protocol->interface_list, link) {
 		printf("struct %s;\n", i->name);
+	}
 	printf("\n");
 
 	wl_list_for_each(i, &protocol->interface_list, link) {
@@ -703,8 +801,23 @@ emit_header(struct protocol *protocol, int server)
 	}
 	printf("\n");
 
-	wl_list_for_each(i, &protocol->interface_list, link) {
+	if (!server) {
+		/* emit constructors */
+		wl_list_for_each(i, &protocol->interface_list, link) {
+			if (i->client_global) {
+				int n = 2 * strlen(i->name) + strlen("struct  *_bind(");
+				printf("struct %s *%s_bind(struct wl_display *display,\n"
+				       "%suint32_t name);\n",
+				       i->name, i->name, indent(n));
+			} else {
+				printf("struct %s *_%s_proxy_create(struct wl_display *display);\n",
+				       i->name, i->name);
+			}
+		}
+	}
+	printf("\n");
 
+	wl_list_for_each(i, &protocol->interface_list, link) {
 		emit_enumerations(i);
 
 		if (server) {
@@ -722,6 +835,214 @@ emit_header(struct protocol *protocol, int server)
 	       "#endif\n"
 	       "\n"
 	       "#endif\n");
+}
+
+static void
+emit_constructor(struct interface *interface) {
+	printf("WL_EXPORT struct %s *\n",
+	       interface->name);
+
+	if (interface->client_global) {
+		printf("%s_bind(struct wl_display *display, uint32_t name)\n"
+		       "{\n"
+		       "\tstruct %s *proxy;\n"
+		       "\tproxy = (struct %s*) wl_display_bind(display, name, &%s_interface, sizeof(struct %s));\n",
+		       interface->name, interface->name,
+		       interface->name, interface->name, interface->name);
+	} else {
+		printf("_%s_proxy_create(struct wl_display *display)\n"
+		       "{\n"
+		       "\tstruct %s *proxy;\n"
+		       "\tproxy = (struct %s*) wl_proxy_create(display, &%s_interface, sizeof(struct %s));\n",
+		       interface->name, interface->name,
+		       interface->name, interface->name, interface->name);
+	}
+
+	if (!wl_list_empty(&interface->property_list)) {
+		printf("\t%s_add_listener(proxy, &%s_property_listener, NULL);\n",
+		       interface->name, interface->name);
+	}
+
+	printf("\treturn proxy;\n"
+	       "}\n\n");
+}
+
+static void
+emit_property_listeners(struct interface *interface) {
+	struct message *m;
+	struct property *p;
+
+	if (wl_list_empty(&interface->property_list))
+	    return;
+
+	wl_list_for_each(p, &interface->property_list, link) {
+		if (!p->change_notify)
+			continue;
+
+		printf("static void\n"
+		       "%s_handle_%s_notify(void *data, struct %s* %s, ",
+		       interface->name, p->name, interface->name, interface->name);
+
+		if (p->type == FLAGS) {
+			printf("uint32_t value, uint32_t change_mask)\n"
+			       "{\n"
+			       "\t%s->%s = (%s->%s & ~change_mask) | (value & change_mask);\n",
+			       interface->name, p->name, interface->name, p->name);
+		} else if (p->type == STRING) {
+			printf("const char *value)\n"
+			       "{\n"
+			       "\tfree(%s->%s);\n"
+			       "\t%s->%s = strdup(value);\n",
+			       interface->name, p->name, interface->name, p->name);
+		} else {
+			emit_simple_type(p->type, 1);
+			printf("value)\n"
+			       "{\n"
+			       "\t%s->%s = value;\n",
+			       interface->name, p->name);
+		}
+		printf("}\n\n");
+	}
+
+	printf("static const struct %s_listener %s_property_listener = {\n",
+	       interface->name, interface->name);
+
+	wl_list_for_each(m, &interface->event_list, link) {
+		if (m->property == NULL) {
+			printf("\tNULL,\n");
+		} else {
+			printf("\t%s_handle_%s,\n",
+			       interface->name, m->name);
+		}
+	}
+
+	printf("};\n\n");
+}
+
+static void
+emit_property_get_set(struct interface *interface) {
+	struct property *p;
+
+	if (wl_list_empty(&interface->property_list))
+	    return;
+
+	wl_list_for_each(p, &interface->property_list, link) {
+		printf("WL_EXPORT ");
+		emit_simple_type(p->type, 1);
+
+		printf("\n"
+		       "%s_get_%s(struct %s* %s)\n"
+		       "{\n"
+		       "\treturn %s->%s;\n"
+		       "}\n\n",
+		       interface->name, p->name,
+		       interface->name, interface->name,
+		       interface->name, p->name);
+
+		if (!p->writable)
+			continue;
+
+		printf("WL_EXPORT void\n"
+		       "%s_set_%s(struct %s* %s, ",
+		       interface->name, p->name,
+		       interface->name, interface->name);
+		emit_simple_type(p->type, 1);
+
+		printf("value)\n"
+		       "{\n"
+		       "\twl_proxy_marshal((struct wl_proxy*) %s,\n"
+		       "\t\t\t %s_SET_%s, ",
+		       interface->name,
+		       interface->uppercase_name,
+		       p->uppercase_name);
+
+		if (p->type == FLAGS) {
+			printf("value, value ^ %s->%s",
+			       interface->name, p->name);
+		} else {
+			printf("value");
+		}
+
+		printf(");\n\n");
+
+		if (p->type == STRING) {
+			printf("\tfree(%s->%s);\n"
+			       "\t%s->%s = strdup(value);\n",
+			       interface->name, p->name,
+			       interface->name, p->name);
+		} else {
+			printf("\t%s->%s = value;\n",
+			       interface->name, p->name);
+		}
+		printf ("}\n\n");
+	}
+}
+
+static void
+emit_destructor(struct interface *interface)
+{
+	struct property *p;
+	struct message *m;
+	int has_destructor = 0;
+
+	wl_list_for_each(m, &interface->request_list, link) {
+		if (m->destructor) {
+			has_destructor = 1;
+			break;
+		}
+	}
+
+	printf("WL_EXPORT void\n");
+	if (has_destructor)
+		printf("_%s_proxy_destroy", interface->name);
+	else
+		printf("%s_destroy", interface->name);
+	printf("(struct %s* %s)\n"
+	       "{\n",
+	       interface->name, interface->name);
+
+	wl_list_for_each(p, &interface->property_list, link) {
+		if (p->type == STRING) {
+			printf("\tfree(%s->%s);\n"
+			       "\t%s->%s = NULL;\n\n",
+			       interface->name, p->name,
+			       interface->name, p->name);
+		}
+	}
+
+	printf ("\twl_proxy_destroy("
+		"(struct wl_proxy *) %s);\n",
+		interface->name);
+
+	printf ("}\n\n");
+}
+
+static void
+emit_client_code(struct protocol *protocol) {
+	struct interface *i;
+
+	if (protocol->copyright)
+		format_copyright(protocol->copyright);
+
+	printf("#include <wayland-client-private.h>\n\n");
+
+	wl_list_for_each(i, &protocol->interface_list, link) {
+		if (i->client_custom)
+			continue;
+
+		emit_object_struct(i);
+	}
+	printf("\n");
+
+	wl_list_for_each(i, &protocol->interface_list, link) {
+		if (i->client_custom)
+			continue;
+
+		emit_property_listeners(i);
+		emit_constructor(i);
+		emit_destructor(i);
+		emit_property_get_set(i);
+	}
 }
 
 static void
@@ -908,6 +1229,9 @@ int main(int argc, char *argv[])
 	if (argc != 2)
 		usage(EXIT_FAILURE);
 
+	if (strcmp(argv[1], "--help") == 0)
+		usage(EXIT_SUCCESS);
+
 	wl_list_init(&protocol.interface_list);
 	protocol.type_index = 0;
 	protocol.null_run_length = 0;
@@ -944,6 +1268,8 @@ int main(int argc, char *argv[])
 		emit_header(&protocol, 1);
 	} else if (strcmp(argv[1], "code") == 0) {
 		emit_code(&protocol);
+	} else if (strcmp(argv[1], "client-code") == 0) {
+		emit_client_code(&protocol);
 	}
 
 	return 0;

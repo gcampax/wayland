@@ -6,3 +6,6 @@
 
 %-client-protocol.h : $(protocoldir)/%.xml
 	$(AM_V_GEN)$(wayland_scanner) client-header < $< > $@
+
+%-client-protocol.c : $(protocoldir)/%.xml
+	$(AM_V_GEN)$(wayland_scanner) client-code < $< > $@

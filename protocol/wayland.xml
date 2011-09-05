@@ -90,7 +90,7 @@
   <!-- A compositor. This object is a global.  The compositor is in
        charge of combining the contents of multiple surfaces into one
        displayable output. -->
-  <interface name="wl_compositor" version="1">
+  <interface name="wl_compositor" version="1" client:global="yes">
     <!-- Factory request for a surface objects. A surface is akin to a
          window. -->
     <request name="create_surface" client:custom="yes">
@@ -99,7 +99,7 @@
   </interface>
 
   <!-- Shared memory support -->
-  <interface name="wl_shm" version="1">
+  <interface name="wl_shm" version="1" client:global="yes">
     <enum name="error">
       <entry name="invalid_format" value="0"/>
       <entry name="invalid_stride" value="1"/>
@@ -156,7 +156,7 @@
     <event name="release"/>
   </interface>
 
-  <interface name="wl_shell" version="1">
+  <interface name="wl_shell" version="1" client:global="yes">
     <enum name="resize_operation">
       <entry name="none" value="0"/>
       <entry name="top" value="1"/>
@@ -265,7 +265,7 @@
     <event name="cancelled"/>
   </interface>
 
-  <interface name="wl_selection_offer" version="1">
+  <interface name="wl_selection_offer" version="1" client:global="yes">
     <!-- Called to receive the selection data as the specified type.
          Sends the pipe fd to the compositor, which forwards it to the
          source in the 'send' event -->
@@ -323,7 +323,7 @@
   </interface>
 
 
-  <interface name="wl_drag_offer" version="1">
+  <interface name="wl_drag_offer" version="1" client:global="yes">
     <!-- Call to accept the offer of the given type -->
     <request name="accept">
       <arg name="time" type="uint"/>
@@ -461,7 +461,7 @@
        or when such a device is hot plugged.  A input_device group
        typically has a pointer and maintains a keyboard_focus and a
        pointer_focus.  -->
-  <interface name="wl_input_device" version="1">
+  <interface name="wl_input_device" version="1" client:global="yes">
     <!-- Set the pointer's image.  This request only takes effect if
          the pointer focus for this device is one of the requesting
          clients surfaces.  -->
@@ -554,7 +554,7 @@
        displays part of the compositor space.  This object is
        published as global during start up, or when a screen is hot
        plugged.  -->
-  <interface name="wl_output" version="1">
+  <interface name="wl_output" version="1" client:global="yes">
 
     <enum name="subpixel">
       <entry name="unknown" value="0"/>
