@@ -64,6 +64,7 @@ struct wl_client {
 	struct wl_list link;
 	struct wl_map objects;
 	int error;
+	struct ucred credentials;
 };
 
 struct wl_display {
@@ -273,11 +274,33 @@ wl_client_create(struct wl_display *display, int fd)
 		return NULL;
 	}
 
+	if (wl_connection_server_handshake(client->connection,
+					   &client->credentials.pid,
+					   &client->credentials.uid,
+					   &client->credentials.gid) < 0) {
+		wl_map_release(&client->objects);
+		wl_connection_destroy(client->connection);
+		free(client);
+		return NULL;
+	}
+
 	bind_display(client, display, 1, 1);
 
 	wl_list_insert(display->client_list.prev, &client->link);
 
 	return client;
+}
+
+WL_EXPORT pid_t
+wl_client_get_pid(struct wl_client *client)
+{
+	return client->credentials.pid;
+}
+
+WL_EXPORT uid_t
+wl_client_get_uid(struct wl_client *client)
+{
+	return client->credentials.uid;
 }
 
 WL_EXPORT void
@@ -547,7 +570,16 @@ display_sync(struct wl_client *client,
 	wl_resource_destroy(callback, 0);
 }
 
+static void
+display_hello(struct wl_client *client,
+	      struct wl_resource *resource) {
+	wl_resource_post_error(resource, WL_DISPLAY_ERROR_INVALID_METHOD,
+			       "The wl_display.hello request can be invoked"
+			       "only at the beginning of the connection sequence");
+}
+
 struct wl_display_interface display_interface = {
+	display_hello,
 	display_bind,
 	display_sync,
 };
@@ -755,6 +787,7 @@ wl_display_add_socket(struct wl_display *display, const char *name)
 	struct wl_socket *s;
 	socklen_t size, name_size;
 	const char *runtime_dir;
+	int one = 1;
 
 	s = malloc(sizeof *s);
 	if (s == NULL)
@@ -797,6 +830,8 @@ wl_display_add_socket(struct wl_display *display, const char *name)
 		free(s);
 		return -1;
 	}
+
+	setsockopt(s->fd, SOL_SOCKET, SO_PASSCRED, &one, sizeof one);
 
 	if (listen(s->fd, 1) < 0) {
 		close(s->fd);

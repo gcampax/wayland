@@ -29,6 +29,7 @@ extern "C" {
 #endif
 
 #include <stdint.h>
+#include <stddef.h>
 #include "wayland-util.h"
 #include "wayland-server-protocol.h"
 
@@ -100,6 +101,9 @@ void wl_display_remove_global(struct wl_display *display,
 struct wl_client *wl_client_create(struct wl_display *display, int fd);
 void wl_client_destroy(struct wl_client *client);
 void wl_client_flush(struct wl_client *client);
+
+pid_t wl_client_get_pid(struct wl_client *client);
+uid_t wl_client_get_uid(struct wl_client *client);
 
 struct wl_resource *
 wl_client_add_object(struct wl_client *client,
