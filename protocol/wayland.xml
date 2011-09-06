@@ -204,38 +204,108 @@
       <arg name="id" type="new_id" interface="wl_selection"/>
     </request>
 
-    <!-- Make the surface visible as a toplevel window. -->
-    <request name="set_toplevel">
-      <arg name="surface" type="object" interface="wl_surface"/>
-    </request>
-
-    <!-- Map the surface relative to an existing surface. The x and y
-         arguments specify the locations of the upper left corner of
-         the surface relative to the upper left corner of the parent
-         surface.  The flags argument controls overflow/clipping
-         behaviour when the surface would intersect a screen edge,
-         panel or such.  And possibly whether the offset only
-         determines the initial position or if the surface is locked
-         to that relative position during moves. -->
-    <request name="set_transient">
+    <!-- Make the surface visible as a toplevel window. The timestamp
+         should be derived from the event that triggered this mapping,
+         and will be used for stacking and applying focus policies.
+         If this is the first surface of the application, it should be
+         taken from the DESKTOP_STARTUP_ID environment variable (if
+	 present).
+	 Parent indicates that this surface is transient (it can be a
+	 dialog box or a popup menu); the compositor shall hide the
+	 surface when the parent is hidden and shall keep the
+         transient surface above the parent at all times. -->
+    <request name="map">
       <arg name="surface" type="object" interface="wl_surface"/>
       <arg name="parent" type="object" interface="wl_surface"/>
-      <arg name="x" type="int"/>
-      <arg name="y" type="int"/>
       <arg name="flags" type="uint"/>
+      <arg name="timestamp" type="uint"/>
     </request>
 
-    <!-- Map the surface as a fullscreen surface.  There are a number
-         of options here: on which output? if the surface size doesn't
-         match the output size, do we scale, change resolution, or add
-         black borders? is that something the client controls?  what
-         about transient surfaces, do they float on top of the
-         fullscreen? what if there's already a fullscreen surface on
-         the output, maybe you can only go fullscreen if you're
-         active?  -->
-    <request name="set_fullscreen">
+    <!-- These flags can be passed to map and affect the interpretation
+         of its parameters -->
+    <enum name="map_flags">
+      <!-- The position in the latest configure request was specified by
+	   the user (for example using a command line switch) and the
+	   compositor should honor it -->
+      <entry name="user_position" value="1"/>
+
+      <!-- Same as user_position, but for size -->
+      <entry name="user_size" value="2"/>
+
+      <!-- The position in map is in the parent's coordinate space, and
+           the surface should be moved when the parent moves. This can be
+           used for popup menus.
+           Parent must be valid or an error is emitted. -->
+      <entry name="keep_parent_position" value="4"/>
+
+      <!-- This window is modal for its parent: while the window is active,
+           the parent is prevented from accepting pointer and keyboard
+	   focus. Events are not redirected though: if you need that, use
+	   a client-side grab and don't set this flag.
+	   Compositors can for example use this hint to position the window
+	   attached to the parent's title bar, or to dim the content of the
+           parent surface.
+           An error is emitted if this flag is set and parent is not valid. -->
+      <entry name="modal_dialog" value="8"/>
+
+      <!-- This window is part of a strut. Struts are four stripes of spaces
+           along the edge of each output that are reserved for special
+	   windows and are not part of the workarea (the space the compositor
+	   uses to move and resize windows). They are computed by unioning
+	   the extents of windows mapped with the affect_struts flag on each edge.
+	   By setting this flag, you're asking that other windows be prevented
+	   from overlap and the compositor reserve space for it at all times.
+	   Position must be valid and must be along the edge of an output.
+	   Results are undefined if the position does not touch an edge
+	   (compositors are free to emit an error or to ignore the flag). If
+	   the surface touches more than one edge, it affects the struts of
+	   the longest.
+	   Parent must be 0, or an error will be emitted. For this reason,
+           this flag is mutually exclusive with keep_parent_position and
+           modal_dialog. -->
+      <entry name="affect_struts" value="16"/>
+    </enum>
+
+    <!-- Unmaps (withdraws) the surface. A withdrawn surface is not
+         visible (compositors must not show it) and cannot be interacted
+	 with. Other than that, compositors must still process updates
+	 and keep a backing store for it, as the surface may be remapped
+	 at any time. -->
+    <request name="unmap">
       <arg name="surface" type="object" interface="wl_surface"/>
     </request>
+
+    <!-- Requests that the compositor activates a window. The exact results
+         are implementation-defined, but will often include restacking to
+	 the top and acquiring pointer and keyboard focus.
+         Timestamp should be derived from the event that triggered this call,
+         and will be used for policy decisions (for example, a compositor
+         may decide that activate requests older than a certain point will
+         result in wm_state demands_attention) -->
+    <request name="activate">
+      <arg name="surface" type="object" interface="wl_surface"/>
+      <arg name="timestamp" type="uint"/>
+    </request>
+
+    <!-- This indicates the current virtual desktop. Compositors supporting
+         virtual desktops should emit a wm_current_desktop_notify as part
+	 of the object bind process, to ensure that all clients have a
+	 correct value for this. -->
+    <property name="wm_current_desktop" type="uint" change-notify="yes"/>
+
+    <!-- This event is sent when the compositor wishes that the client
+	 destroyed the surface, for example because the user clicked an
+         X button. This event may be followed immediately by a ping
+         event on wl_display and then possibly termination (but the client
+         can prevent this by responding to ping).
+         The compositor should not unmap the window or close the connection
+         just because a delete event is not acted upon timely: the client
+         is allowed to ask for confirmation or to show a window indicating
+         that further progress is needed before cleanly closing. -->
+    <event name="delete">
+      <arg name="surface" type="object" interface="wl_surface"/>
+      <arg name="timestamp" type="uint"/>
+    </event>
   </interface>
 
   <interface name="wl_selection" version="1">
@@ -425,15 +495,51 @@
          programmatically (for example because its content changed). The
 	 gravity argument specifies how to position the surface, and in
 	 particular indicates a reference point that will be kept in the
-	 same place in the screen after resizing. A value of static is not
-	 used and is equivalent to topleft.
-	 The compositor is free to ignore the new size or the gravity hint,
+	 same place in the screen after resizing, if position is not given,
+	 otherwise indicates which point should be placed at (x,y).
+	 Position can be (-1,-1) to indicate that only resizing should take
+	 place, and the new position is to be computed by the compositor
+	 (possibly according to the gravity hint). Other negative values
+	 will cause an error.
+	 The compositor is free to ignore the new size, position or gravity hint,
 	 but must at all times emit a configure_notify event reporting the
 	 real size and position of the surface. -->
     <request name="configure">
       <arg name="width" type="int"/>
       <arg name="height" type="int"/>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
       <arg name="gravity" type="uint"/>
+    </request>
+
+    <!-- The configure_hint request provides the compositor with a set
+         of values that can be used to constrain the size of the window.
+	 It is recommended (though not required) that compositors respect
+	 these hints, when set, and only configure windows to acceptable
+	 sizes, as most toolkits are not designed to handle underallocations.
+	 All arguments can be -1, to indicate that a particular hint is
+	 not relevant. Other negative values will cause an error.
+         Multiple configure_hint requests in succession override each other
+         for all hints, including those specified as -1. Toolkits that
+	 allow setting each one independently should cache the value and
+	 emit a full request every time.
+         The exact constraint, for each dimension, is that it must not be
+         larger than max_size (if specified), it must not be smaller than
+	 min_size (if specified), and must be equal to
+	 base_size + n * inc_size, for some integer value of n (if both
+	 base_size and inc_size are specified). If aspect ratio is
+	 specified, the ratio of width to height must be equal to that
+	 given (up to a reasonable precision) -->
+    <request name="configure_hint">
+      <arg name="max_width" type="int"/>
+      <arg name="max_height" type="int"/>
+      <arg name="min_width" type="int"/>
+      <arg name="min_height" type="int"/>
+      <arg name="base_width" type="int"/>
+      <arg name="base_height" type="int"/>
+      <arg name="inc_width" type="int"/>
+      <arg name="inc_height" type="int"/>
+      <arg name="aspect_ratio" type="double"/>
     </request>
 
     <!-- The configure_notify event communicates to the client the new
@@ -453,6 +559,110 @@
       <arg name="x" type="int"/>
       <arg name="y" type="int"/>
     </event>
+
+    <!-- This is the title of the surface. It should be a localized UTF-8 string
+         that can show in the decorations and in application or window switchers.
+         For futher information on the content of this property, see the
+         Human Interface Guidelines for your target environment.
+         Compositors cannot change the value of wm_name, and should accept any
+         value, although are free to show different strings in their UI -->
+    <property name="wm_name" type="string" writable="yes"/>
+
+    <!-- This is an identifier for the application holding this surface. It
+         should be the basename of a .desktop file (without .desktop) that
+	 can be found in standard application directories. -->
+    <property name="wm_class" type="string" writable="yes"/>
+
+    <!-- This is a numeric identifier for the virtual desktop showing this window.
+         Compositors that don't support the concept should refuse any attempt to
+	 set it by emitting a wm_desktop_notify with value=0.
+         Before mapping the main window, clients should set this property to
+         the value obtained from the DESKTOP_STARTUP_ID environment variable, if
+         given. -->
+    <property name="wm_desktop" type="uint" writable="yes" change-notify="yes"/>
+
+    <enum name="wm_type">
+      <entry name="normal" value="0"/>
+      <entry name="desktop" value="1"/>
+      <entry name="dock" value="2"/>
+      <entry name="toolbar" value="3"/>
+      <entry name="floating_menu" value="4"/>
+      <entry name="utility" value="5"/>
+      <entry name="splash" value="6"/>
+      <entry name="dialog" value="7"/>
+      <entry name="dropdown_menu" value="8"/>
+      <entry name="popup_menu" value="9"/>
+      <entry name="tooltip" value="10"/>
+      <entry name="notification" value="11"/>
+      <entry name="combo" value="12"/>
+      <!-- XXX: is this needed? Or rather it should be a special cursor/
+           or a surface managed by the compositor? -->
+      <entry name="dnd" value="13"/>
+    </enum>
+
+    <!-- This specifies the type of this surface. The compositor may use this
+	 hint to apply different policies or decorations, although the exact
+         effects are implementation-defined. -->
+    <property name="wm_window_type" type="uint" writable="yes"/>
+
+    <!-- This indicates if the window should accept keyboard focus. Any nonzero
+         value means true.
+         Differently from X11, there are only input focus mode: either you accept
+         focus (in a mode similar to PassiveInput), or you don't. This difference
+         is because there are no child windows in wayland and you cannot explicitly
+         set the input focus around. -->
+    <property name="wm_accept_focus" type="uint" writable="yes"/>
+
+    <enum name="wm_state">
+      <entry name="normal" value="0" />
+      <entry name="iconic" value="1" />
+      <entry name="withdrawn" value="2" />
+      <entry name="maximized_horizontally" value="4" />
+      <entry name="maximized_vertically" value="16" />
+      <entry name="fullscreen" value="32" />
+      <entry name="above" value="64" />
+      <entry name="sticky" value="128" />
+      <entry name="demands_attention" value="256" />
+    </enum>
+
+    <!-- This is the state of the surface. Values are taken from the wm_state enum.
+         Normal is the absence of any other state, and indicates that the surface
+	 is mapped normally, can be resized and can be focused.
+	 Iconic indicates that the compositor is not mapping the surface normally,
+	 and the surface won't receive input or focus; other than that, iconic is
+	 equal to normal (so the client should continue emitting updates and animations,
+	 as well as processing syntethic events, since the compositor may be showing
+	 a thumbnail of the window or other form of preview). The other flags
+	 indicates how the window should be shown when the iconic flag is cleared.
+	 Withdrawn indicates that the window exists but the client wishes it to be
+	 hidden. The compositor must not map it or emit any input device events on it,
+	 but it must continue processing configures and updates, and be prepared to
+	 map it again at any time. The other flags indicates how the window should
+	 act when the window is mapped again. This flag cannot be set or cleared
+	 using set_wm_state, use map/unmap methods on wl_shell instead.
+	 Maximized_horizontally and maximized_vertically indicate that the surface
+	 is grown to fit all available space on the screen in either direction.
+	 Configure requests for the maximized direction must be ignored, although the
+	 compositor can cache them and reuse them when the flag is cleared.
+	 Fullscreen indicates that the surface is fullscreen, that is its size is
+	 the size of one entire output, ignoring any UI element of the compositor that
+	 would normally constrain surface size. This flag can be set on a withdrawn
+	 or iconic window, indicating that upon state change the window should be
+	 (or will be, if the flag is set by the compositor) fullscreened.
+	 Above indicates a surface which should be stacked above all other surfaces
+	 that don't have the above flags set. The compositor is free to ignore this
+	 bit and stack all surfaces equally, but if doing so it should clear the flag
+	 by emitting a wm_state_notify.
+	 Sticky indicates that the surface should be shown on all virtual desktops.
+	 If the compositor does not support the concept, setting or clearing this bit
+	 will have no effect (and the compositor is not required to clear it).
+	 Demands_attention indicates that the surface wishes to receive attention
+	 (that is, input focus), for whatever reason. The compositor can set it if
+	 it prevents other programmatical attempts to capture focus, or if it delays
+	 mapping. The compositor will clear it when it feels the user has acknowledged
+	 the request (for example, by giving focus to the surface or raising it to the
+	 top of the stack) -->
+    <property name="wm_state" type="flags" writable="yes" change-notify="yes"/>
   </interface>
 
 
