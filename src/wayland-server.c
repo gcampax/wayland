@@ -182,7 +182,7 @@ wl_client_connection_data(int fd, uint32_t mask, void *data)
 
 		if (closure == NULL && errno == EINVAL) {
 			wl_resource_post_error(resource,
-					       WL_DISPLAY_ERROR_INVALID_METHOD,
+					       WL_DISPLAY_ERROR_INVALID_ARGUMENT,
 					       "invalid arguments for %s@%d.%s",
 					       object->interface->name,
 					       object->id,
@@ -240,14 +240,15 @@ wl_client_get_display(struct wl_client *client)
 	return client->display;
 }
 
-static void
+static int
 bind_display(struct wl_client *client,
-	     void *data, uint32_t version, uint32_t id);
+	     struct wl_display *display, uint32_t client_version);
 
 WL_EXPORT struct wl_client *
 wl_client_create(struct wl_display *display, int fd)
 {
 	struct wl_client *client;
+	uint32_t display_version;
 
 	client = malloc(sizeof *client);
 	if (client == NULL)
@@ -276,14 +277,21 @@ wl_client_create(struct wl_display *display, int fd)
 	if (wl_connection_server_handshake(client->connection,
 					   &client->credentials.pid,
 					   &client->credentials.uid,
-					   &client->credentials.gid) < 0) {
+					   &client->credentials.gid,
+					   &display_version) < 0) {
 		wl_map_release(&client->objects);
 		wl_connection_destroy(client->connection);
 		free(client);
 		return NULL;
 	}
 
-	bind_display(client, display, 1, 1);
+	if (bind_display(client, display, display_version) < 0) {
+		wl_client_flush(client);
+		wl_map_release(&client->objects);
+		wl_connection_destroy(client->connection);
+		free(client);
+		return NULL;
+	}
 
 	wl_list_insert(display->client_list.prev, &client->link);
 
@@ -540,10 +548,19 @@ wl_input_device_update_grab(struct wl_input_device *device,
 static void
 display_bind(struct wl_client *client,
 	     struct wl_resource *resource, uint32_t name,
-	     const char *interface, uint32_t version, uint32_t id)
+	     const char *interface, uint32_t id, uint32_t client_version)
 {
 	struct wl_global *global;
 	struct wl_display *display = resource->data;
+
+	if (name == 1) {
+		wl_resource_post_error(resource,
+				       WL_DISPLAY_ERROR_INVALID_ARGUMENT,
+				       "Attempted to bind global object named 1."
+				       "This is the global display object and can only "
+				       "be bound as part of the connection process");
+		return;
+	}
 
 	wl_list_for_each(global, &display->global_list, link)
 		if (global->name == name)
@@ -551,17 +568,26 @@ display_bind(struct wl_client *client,
 
 	if (&global->link == &display->global_list)
 		wl_resource_post_error(resource,
-				       WL_DISPLAY_ERROR_INVALID_OBJECT,
+				       WL_DISPLAY_ERROR_INVALID_ARGUMENT,
 				       "invalid global %d", name);
 	else
-		global->bind(client, global->data, version, id);
+		global->bind(client, global->data, id, client_version);
 }
 
 static void
 display_sync(struct wl_client *client,
-	     struct wl_resource *resource, uint32_t id)
+	     struct wl_resource *resource, uint32_t id, uint32_t client_version)
 {
 	struct wl_resource *callback;
+
+	if (client_version != wl_callback_interface.version) {
+		wl_resource_post_error(resource,
+				       WL_DISPLAY_ERROR_VERSION_MISMATCH,
+				       "Invalid version %d for interface wl_callback. "
+				       "Supported is only %d",
+				       client_version, wl_callback_interface.version);
+		return;
+	}
 
 	callback = wl_client_add_object(client,
 					&wl_callback_interface, NULL, id, NULL);
@@ -571,7 +597,9 @@ display_sync(struct wl_client *client,
 
 static void
 display_hello(struct wl_client *client,
-	      struct wl_resource *resource) {
+	      struct wl_resource *resource,
+	      uint32_t protocol_version,
+	      uint32_t display_version) {
 	wl_resource_post_error(resource, WL_DISPLAY_ERROR_INVALID_METHOD,
 			       "The wl_display.hello request can be invoked"
 			       "only at the beginning of the connection sequence");
@@ -583,16 +611,27 @@ struct wl_display_interface display_interface = {
 	display_sync,
 };
 
-static void
+static int
 bind_display(struct wl_client *client,
-	     void *data, uint32_t version, uint32_t id)
+	     struct wl_display *display, uint32_t client_version)
 {
-	struct wl_display *display = data;
 	struct wl_global *global;
 
+	/* I need to create a display resource before checking the
+	   version, as I need it to emit the error */
 	client->display_resource =
 		wl_client_add_object(client, &wl_display_interface,
-				     &display_interface, id, display);
+				     &display_interface, 1, display);
+
+	if (client_version != wl_display_interface.version) {
+		wl_resource_post_error(client->display_resource,
+				       WL_DISPLAY_ERROR_VERSION_MISMATCH,
+				       "Invalid version %d for interface wl_display. "
+				       "Supported is only %d",
+				       client_version, wl_display_interface.version);
+		wl_resource_destroy(client->display_resource, 0);
+		return -1;
+	}
 
 	wl_list_for_each(global, &display->global_list, link)
 		wl_resource_post_event(client->display_resource,
@@ -600,6 +639,7 @@ bind_display(struct wl_client *client,
 				       global->name,
 				       global->interface->name,
 				       global->interface->version);
+	return 0;
 }
 
 WL_EXPORT struct wl_display *
@@ -629,12 +669,9 @@ wl_display_create(void)
 
 	display->id = 1;
 
-	if (!wl_display_add_global(display, &wl_display_interface, 
-				   display, bind_display)) {
-		wl_event_loop_destroy(display->loop);
-		free(display);
-		return NULL;
-	}
+	/* We used to add the display as a global, but we no
+	   longer do it as the display is automatically bound
+	   to client id 1 as part of the initial handshake. */
 
 	return display;
 }

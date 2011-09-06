@@ -30,6 +30,9 @@
 struct wl_connection;
 struct wl_closure;
 
+#define WL_CONNECTION_HANDSHAKE_SIZE 4 /* in uint32_t units */
+#define WL_CONNECTION_WIRE_PROTOCOL 1
+
 #define WL_CONNECTION_READABLE 0x01
 #define WL_CONNECTION_WRITABLE 0x02
 
@@ -45,7 +48,9 @@ void wl_connection_consume(struct wl_connection *connection, size_t size);
 int wl_connection_data(struct wl_connection *connection, uint32_t mask);
 void wl_connection_write(struct wl_connection *connection, const void *data, size_t count);
 int wl_connection_client_handshake(struct wl_connection *connection);
-int wl_connection_server_handshake(struct wl_connection *connection, pid_t *pid, uid_t *uid, gid_t *gid);
+int wl_connection_server_handshake(struct wl_connection *connection,
+				   pid_t *pid, uid_t *uid, gid_t *gid,
+				   uint32_t *display_version);
 
 struct wl_closure *
 wl_connection_vmarshal(struct wl_connection *connection,

@@ -7,6 +7,7 @@
   <copyright>
     Copyright © 2008-2011 Kristian Høgsberg
     Copyright © 2010-2011 Intel Corporation
+    Copyright © 2011 Giovanni Campagna &lt;scampa.giovanni@gmail.com&gt;
 
     Permission to use, copy, modify, distribute, and sell this
     software and its documentation for any purpose is hereby granted
@@ -39,12 +40,25 @@
          compositors must read it immediately after accepting the
          connection. The compositor responds to this request by
          emitting global events. -->
-    <request name="hello" />
+    <request name="hello">
+      <!-- This refers to the serialization protocol in use, not to
+           any specific interface. It should be bumped only when
+           incompatible changes are introduced.
+           It is an hard error if this parameter does not match the
+           one compiled in the server library, and the connection
+           will be immediately closed. -->
+      <arg name="protocol_version" type="uint"/>
+      <!-- This refers to the version of the wl_display object that
+           is broadcasted as part of the initialization sequence.
+           Generally it is expected that the client version matches
+           that of the server, although it may support a "legacy mode"
+           for older clients. -->
+      <arg name="display_version" type="uint"/>
+    </request>
 
     <request name="bind">
       <arg name="name" type="uint"/>
       <arg name="interface" type="string"/>
-      <arg name="version" type="uint"/>
       <arg name="id" type="new_id" interface="wl_object"/>
     </request>
 
@@ -65,9 +79,22 @@
     </event>
 
     <enum name="error">
+      <!-- The first argument of a request does not name a valid
+           bound object. -->
       <entry name="invalid_object" value="0"/>
+
+      <!-- The opcode of a request is not valid for the object -->
       <entry name="invalid_method" value="1"/>
-      <entry name="no_memory" value="2"/>
+
+      <!-- The request data does not match the signature, or one
+           of the parameters was not valid. -->
+      <entry name="invalid_argument" value="2"/>
+
+      <entry name="no_memory" value="3"/>
+
+      <!-- The version requested by the client upon creating an
+           object was not available on the server -->
+      <entry name="version_mismatch" value="4"/>
     </enum>
 
     <!-- Notify the client of global objects. These are objects that
@@ -75,16 +102,27 @@
          initial client connection sequence, upon device hotplugs,
          device disconnects, reconfiguration or other events.  The
          server will always announce an object before the object sends
-         out events. -->
+         out events.
+         The version indicates the maximum version the server supports for
+         a global. It may support older version, though this is not
+         required.
+         Name 0 is invalid and guaranteed never to name an object. Name
+         1 is reserved for the wl_display object and cannot be bound
+         using wl_display.bind (it is bound automatically to client id 1
+         upon initial connection). -->
     <event name="global">
       <arg name="name" type="uint" interface="wl_object"/>
       <arg name="interface" type="string"/>
       <arg name="version" type="uint"/>
     </event>
 
-    <!-- Notify the client of removed global objects. -->
+    <!-- Notify the client of removed global objects. Clients should
+         destroy all bound objects referring to this global, as the
+         server will reject all requests on them.
+         Further attempts to bind @name will result in a invalid_argument
+         error. -->
     <event name="global_remove">
-      <arg name="id" type="uint" />
+      <arg name="name" type="uint" />
     </event>
 
   </interface>

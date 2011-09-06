@@ -87,7 +87,7 @@ void wl_display_add_object(struct wl_display *display,
 			   struct wl_object *object);
 
 typedef void (*wl_global_bind_func_t)(struct wl_client *client, void *data,
-				      uint32_t version, uint32_t id);
+				      uint32_t id, uint32_t client_version);
 
 struct wl_global *wl_display_add_global(struct wl_display *display,
 					const struct wl_interface *interface,

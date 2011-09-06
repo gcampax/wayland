@@ -40,6 +40,8 @@
 #include "wayland-util.h"
 #include "connection.h"
 
+extern const struct wl_interface wl_display_interface;
+
 #define ARRAY_LENGTH(a) (sizeof (a) / sizeof (a)[0])
 
 struct wl_buffer {
@@ -328,11 +330,12 @@ wl_connection_data(struct wl_connection *connection, uint32_t mask)
 
 int
 wl_connection_server_handshake(struct wl_connection *connection,
-			       pid_t *pid, uid_t *uid, gid_t *gid)
+			       pid_t *pid, uid_t *uid, gid_t *gid,
+			       uint32_t *client_version)
 {
 	struct msghdr msg;
 	struct iovec iov;
-	uint32_t buf[2];
+	uint32_t buf[WL_CONNECTION_HANDSHAKE_SIZE];
 	char cmsg_buf[CMSG_SPACE(sizeof(struct ucred))];
 	struct cmsghdr *cmsg;
 	struct ucred tmp;
@@ -362,15 +365,27 @@ wl_connection_server_handshake(struct wl_connection *connection,
 
 	/* Sanity check the handshake */
 	if (buf[0] != 1
-	    || buf[1] != (sizeof(buf) << 2))
+	    || buf[1] != (sizeof(buf) << 2)) {
+		fprintf(stderr,
+			"failed handshake: malformed request\n");
 		return -1;
+	}
+	if (buf[2] != WL_CONNECTION_WIRE_PROTOCOL) {
+		fprintf(stderr,
+			"failed handshake: invalid protocol version "
+			"(was %d, expected %d)", buf[2], WL_CONNECTION_WIRE_PROTOCOL);
+		return -1;
+	}
 
 	/* Check the control message */
 	cmsg = (struct cmsghdr *) cmsg_buf;
 	if (cmsg->cmsg_level != SOL_SOCKET
 	    || cmsg->cmsg_level != SCM_CREDENTIALS
-	    || cmsg->cmsg_len != CMSG_LEN(sizeof(struct ucred)))
+	    || cmsg->cmsg_len != CMSG_LEN(sizeof(struct ucred))) {
+		fprintf(stderr,
+			"failed handshake: missing (or invalid) credentials");
 		return -1;
+	}
 
 	memcpy(&tmp, CMSG_DATA(cmsg), sizeof(struct ucred));
 
@@ -380,6 +395,8 @@ wl_connection_server_handshake(struct wl_connection *connection,
 		*uid = tmp.uid;
 	if (gid)
 		*gid = tmp.gid;
+	if (client_version)
+		*client_version = buf[3];
 
 	return 0;
 }
@@ -389,7 +406,7 @@ wl_connection_client_handshake(struct wl_connection *connection)
 {
 	struct msghdr msg;
 	struct iovec iov;
-	uint32_t buf[2];
+	uint32_t buf[WL_CONNECTION_HANDSHAKE_SIZE];
 	char cmsg_buf[CMSG_SPACE(sizeof(struct ucred))];
 	struct cmsghdr *cmsg;
 	struct ucred tmp;
@@ -397,6 +414,8 @@ wl_connection_client_handshake(struct wl_connection *connection)
 
 	buf[0] = 1; /* display object */
 	buf[1] = (sizeof(buf) << 16); /* opcode is 0 */
+	buf[2] = WL_CONNECTION_WIRE_PROTOCOL;
+	buf[3] = wl_display_interface.version;
 
 	iov.iov_base = buf;
 	iov.iov_len = sizeof(buf);
@@ -476,6 +495,17 @@ wl_message_size_extra(const struct wl_message *message)
 	return extra;
 }
 
+static int
+wl_message_signature_size(const struct wl_message *message)
+{
+	int i, ret;
+
+	for (i = 0, ret = 0; message->signature[i]; i++)
+		ret += 1 + (message->signature[i] == 'n');
+
+	return ret;
+}
+
 struct wl_closure *
 wl_connection_vmarshal(struct wl_connection *connection,
 		       struct wl_object *sender,
@@ -490,35 +520,36 @@ wl_connection_vmarshal(struct wl_connection *connection,
 	const char **sp, *s;
 	char *extra;
 	int i, count, fd, extra_size, *fd_ptr;
+	int argpos;
 	double d;
 
 	extra_size = wl_message_size_extra(message);
-	count = strlen(message->signature) + 2;
+	count = strlen(message->signature);
 	extra = (char *) closure->buffer;
 	start = &closure->buffer[DIV_ROUNDUP(extra_size, sizeof *p)];
 	p = &start[2];
-	for (i = 2; i < count; i++) {
-		switch (message->signature[i - 2]) {
+	for (i = 0, argpos = 2; i < count; i++, argpos++) {
+		switch (message->signature[i]) {
 		case 'u':
-			closure->types[i] = &ffi_type_uint32;
-			closure->args[i] = p;
+			closure->types[argpos] = &ffi_type_uint32;
+			closure->args[argpos] = p;
 			*p++ = va_arg(ap, uint32_t);
 			break;
 		case 'i':
-			closure->types[i] = &ffi_type_sint32;
-			closure->args[i] = p;
+			closure->types[argpos] = &ffi_type_sint32;
+			closure->args[argpos] = p;
 			*p++ = va_arg(ap, int32_t);
 			break;
 		case 'd':
-			closure->types[i] = &ffi_type_double;
-			closure->args[i] = p;
+			closure->types[argpos] = &ffi_type_double;
+			closure->args[argpos] = p;
 			d = va_arg(ap, double);
 			memcpy(p, &d, sizeof(double));
 			p += DIV_ROUNDUP(sizeof(double), sizeof *p);
 			break;
 		case 's':
-			closure->types[i] = &ffi_type_pointer;
-			closure->args[i] = extra;
+			closure->types[argpos] = &ffi_type_pointer;
+			closure->args[argpos] = extra;
 			sp = (const char **) extra;
 			extra += sizeof *sp;
 
@@ -535,8 +566,8 @@ wl_connection_vmarshal(struct wl_connection *connection,
 			p += DIV_ROUNDUP(length, sizeof *p);
 			break;
 		case 'o':
-			closure->types[i] = &ffi_type_pointer;
-			closure->args[i] = extra;
+			closure->types[argpos] = &ffi_type_pointer;
+			closure->args[argpos] = extra;
 			objectp = (struct wl_object **) extra;
 			extra += sizeof *objectp;
 
@@ -546,15 +577,19 @@ wl_connection_vmarshal(struct wl_connection *connection,
 			break;
 
 		case 'n':
-			closure->types[i] = &ffi_type_uint32;
-			closure->args[i] = p;
+			closure->types[argpos] = &ffi_type_uint32;
+			closure->args[argpos] = p;
+			argpos++;
+			closure->types[argpos] = &ffi_type_uint32;
+			closure->args[argpos] = p+1;
 			object = va_arg(ap, struct wl_object *);
 			*p++ = object->id;
+			*p++ = object->interface->version;
 			break;
 
 		case 'a':
-			closure->types[i] = &ffi_type_pointer;
-			closure->args[i] = extra;
+			closure->types[argpos] = &ffi_type_pointer;
+			closure->args[argpos] = extra;
 			arrayp = (struct wl_array **) extra;
 			extra += sizeof *arrayp;
 
@@ -577,11 +612,12 @@ wl_connection_vmarshal(struct wl_connection *connection,
 			break;
 
 		case 'h':
-			closure->types[i] = &ffi_type_sint;
-			closure->args[i] = extra;
+			closure->types[argpos] = &ffi_type_sint;
+			closure->args[argpos] = extra;
 			fd_ptr = (int *) extra;
 			extra += sizeof *fd_ptr;
 
+			/* XXX: is this leaking a file descriptor? */
 			fd = va_arg(ap, int);
 			dup_fd = fcntl(fd, F_DUPFD_CLOEXEC, 0);
 			if (dup_fd < 0) {
@@ -604,7 +640,7 @@ wl_connection_vmarshal(struct wl_connection *connection,
 
 	closure->start = start;
 	closure->message = message;
-	closure->count = count;
+	closure->count = argpos;
 
 	return closure;
 }
@@ -618,12 +654,12 @@ wl_connection_demarshal(struct wl_connection *connection,
 	uint32_t *p, *next, *end, length;
 	int *fd;
 	char *extra, **s;
-	int i, count, extra_space;
+	int i, count, extra_space, argpos;
 	struct wl_object **object;
 	struct wl_array **array;
 	struct wl_closure *closure = &connection->receive_closure;
 
-	count = strlen(message->signature) + 2;
+	count = wl_message_signature_size(message) + 2;
 	if (count > ARRAY_LENGTH(closure->types)) {
 		printf("too many args (%d)\n", count);
 		errno = EINVAL;
@@ -647,7 +683,7 @@ wl_connection_demarshal(struct wl_connection *connection,
 	p = &closure->buffer[2];
 	end = (uint32_t *) ((char *) p + size);
 	extra = (char *) end;
-	for (i = 2; i < count; i++) {
+	for (i = 0, argpos = 2; i < count; i++, argpos++) {
 		if (p + 1 > end) {
 			printf("message too short, "
 			       "object (%d), message %s(%s)\n",
@@ -656,21 +692,21 @@ wl_connection_demarshal(struct wl_connection *connection,
 			goto err;
 		}
 
-		switch (message->signature[i - 2]) {
+		switch (message->signature[i]) {
 		case 'u':
-			closure->types[i] = &ffi_type_uint32;
-			closure->args[i] = p++;
+			closure->types[argpos] = &ffi_type_uint32;
+			closure->args[argpos] = p++;
 			break;
 		case 'i':
-			closure->types[i] = &ffi_type_sint32;
-			closure->args[i] = p++;
+			closure->types[argpos] = &ffi_type_sint32;
+			closure->args[argpos] = p++;
 			break;
 		case 'd':
-			closure->types[i] = &ffi_type_double;
-			closure->args[i] = p;
+			closure->types[argpos] = &ffi_type_double;
+			closure->args[argpos] = p;
 			p += DIV_ROUNDUP(sizeof(double), sizeof *p);
 		case 's':
-			closure->types[i] = &ffi_type_pointer;
+			closure->types[argpos] = &ffi_type_pointer;
 			length = *p++;
 
 			next = p + DIV_ROUNDUP(length, sizeof *p);
@@ -684,7 +720,7 @@ wl_connection_demarshal(struct wl_connection *connection,
 
 			s = (char **) extra;
 			extra += sizeof *s;
-			closure->args[i] = s;
+			closure->args[argpos] = s;
 
 			if (length == 0) {
 				*s = NULL;
@@ -702,10 +738,10 @@ wl_connection_demarshal(struct wl_connection *connection,
 			p = next;
 			break;
 		case 'o':
-			closure->types[i] = &ffi_type_pointer;
+			closure->types[argpos] = &ffi_type_pointer;
 			object = (struct wl_object **) extra;
 			extra += sizeof *object;
-			closure->args[i] = object;
+			closure->args[argpos] = object;
 
 			*object = wl_map_lookup(objects, *p);
 			if (*object == NULL && *p != 0) {
@@ -718,8 +754,8 @@ wl_connection_demarshal(struct wl_connection *connection,
 			p++;
 			break;
 		case 'n':
-			closure->types[i] = &ffi_type_uint32;
-			closure->args[i] = p;
+			closure->types[argpos] = &ffi_type_uint32;
+			closure->args[argpos] = p; /* object id */
 			object = wl_map_lookup(objects, *p);
 			if (*p == 0 || object != NULL) {
 				printf("not a new object (%d), "
@@ -729,9 +765,13 @@ wl_connection_demarshal(struct wl_connection *connection,
 				goto err;
 			}
 			p++;
+			argpos++;
+			closure->types[argpos] = &ffi_type_uint32;
+			closure->args[argpos] = p; /* client version */
+			p++;
 			break;
 		case 'a':
-			closure->types[i] = &ffi_type_pointer;
+			closure->types[argpos] = &ffi_type_pointer;
 			length = *p++;
 
 			next = p + DIV_ROUNDUP(length, sizeof *p);
@@ -745,7 +785,7 @@ wl_connection_demarshal(struct wl_connection *connection,
 
 			array = (struct wl_array **) extra;
 			extra += sizeof *array;
-			closure->args[i] = array;
+			closure->args[argpos] = array;
 
 			*array = (struct wl_array *) extra;
 			extra += sizeof **array;
@@ -756,11 +796,11 @@ wl_connection_demarshal(struct wl_connection *connection,
 			p = next;
 			break;
 		case 'h':
-			closure->types[i] = &ffi_type_sint;
+			closure->types[argpos] = &ffi_type_sint;
 
 			fd = (int *) extra;
 			extra += sizeof *fd;
-			closure->args[i] = fd;
+			closure->args[argpos] = fd;
 
 			wl_buffer_copy(&connection->fds_in, fd, sizeof *fd);
 			connection->fds_in.tail += sizeof *fd;
@@ -772,7 +812,7 @@ wl_connection_demarshal(struct wl_connection *connection,
 		}
 	}
 
-	closure->count = i;
+	closure->count = argpos;
 	ffi_prep_cif(&closure->cif, FFI_DEFAULT_ABI,
 		     closure->count, &ffi_type_void, closure->types);
 
@@ -781,7 +821,7 @@ wl_connection_demarshal(struct wl_connection *connection,
 	return closure;
 
  err:
-	closure->count = i;
+	closure->count = argpos;
 	wl_closure_destroy(closure);
 	wl_connection_consume(connection, size);
 

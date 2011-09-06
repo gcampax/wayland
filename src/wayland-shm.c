@@ -114,13 +114,21 @@ wl_shm_buffer_init(struct wl_shm *shm, struct wl_client *client, uint32_t id,
 
 static void
 shm_create_buffer(struct wl_client *client, struct wl_resource *resource,
-		  uint32_t id, int fd, int32_t width, int32_t height,
+		  uint32_t id, uint32_t client_version,
+		  int fd, int32_t width, int32_t height,
 		  uint32_t stride, uint32_t format)
 {
 	struct wl_shm *shm = resource->data;
 	struct wl_shm_buffer *buffer;
 	void *data;
 
+	if (client_version != wl_buffer_interface.version) {
+		wl_resource_post_error(resource,
+				       WL_DISPLAY_ERROR_VERSION_MISMATCH,
+				       "Invalid version %d for interface wl_buffer. "
+				       "Supported is only %d",
+				       client_version, wl_buffer_interface.version);
+	}
 
 	switch (format) {
 	case WL_SHM_FORMAT_ARGB32:
