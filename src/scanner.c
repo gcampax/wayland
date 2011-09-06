@@ -88,7 +88,8 @@ enum arg_type {
 	OBJECT,
 	ARRAY,
 	FLAGS,
-	FD
+	FD,
+	DOUBLE
 };
 
 struct property {
@@ -168,6 +169,8 @@ type_from_string(const char *type) {
 		return ARRAY;
 	else if (strcmp(type, "fd") == 0)
 		return FD;
+	else if (strcmp(type, "double") == 0)
+		return DOUBLE;
 	else
 		return INVALID;
 }
@@ -458,6 +461,9 @@ emit_simple_type(enum arg_type type, int is_const)
 			printf("const char *");
 		else
 			printf("char *");
+		break;
+	case DOUBLE:
+		printf("double ");
 		break;
 	case ARRAY:
 		printf("struct wl_array *");
@@ -1158,6 +1164,9 @@ emit_messages(struct wl_list *message_list,
 				break;
 			case FD:
 				printf("h");
+				break;
+			case DOUBLE:
+				printf("d");
 				break;
 			}
 		}

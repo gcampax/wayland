@@ -1,3 +1,4 @@
+/* -*- mode: c; c-basic-offset: 8 -*- */
 /*
  * Copyright © 2008 Kristian Høgsberg
  *
@@ -73,6 +74,7 @@ union wl_value {
 	struct wl_object *object;
 	uint32_t new_id;
 	struct wl_array *array;
+	double doublev;
 };
 
 static void
@@ -381,6 +383,7 @@ wl_connection_vmarshal(struct wl_connection *connection,
 	const char **sp, *s;
 	char *extra;
 	int i, count, fd, extra_size, *fd_ptr;
+	double d;
 
 	extra_size = wl_message_size_extra(message);
 	count = strlen(message->signature) + 2;
@@ -398,6 +401,13 @@ wl_connection_vmarshal(struct wl_connection *connection,
 			closure->types[i] = &ffi_type_sint32;
 			closure->args[i] = p;
 			*p++ = va_arg(ap, int32_t);
+			break;
+		case 'd':
+			closure->types[i] = &ffi_type_double;
+			closure->args[i] = p;
+			d = va_arg(ap, double);
+			memcpy(p, &d, sizeof(double));
+			p += DIV_ROUNDUP(sizeof(double), sizeof *p);
 			break;
 		case 's':
 			closure->types[i] = &ffi_type_pointer;
@@ -548,6 +558,10 @@ wl_connection_demarshal(struct wl_connection *connection,
 			closure->types[i] = &ffi_type_sint32;
 			closure->args[i] = p++;
 			break;
+		case 'd':
+			closure->types[i] = &ffi_type_double;
+			closure->args[i] = p;
+			p += DIV_ROUNDUP(sizeof(double), sizeof *p);
 		case 's':
 			closure->types[i] = &ffi_type_pointer;
 			length = *p++;
@@ -716,6 +730,9 @@ wl_closure_print(struct wl_closure *closure, struct wl_object *target, int send)
 			break;
 		case 'i':
 			fprintf(stderr, "%d", value->uint32);
+			break;
+		case 'd':
+			fprintf(stderr, "%g", value->doublev);
 			break;
 		case 's':
 			fprintf(stderr, "\"%s\"", value->string);
