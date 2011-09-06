@@ -82,7 +82,8 @@ enum arg_type {
 	STRING,
 	OBJECT,
 	ARRAY,
-	FD
+	FD,
+	DOUBLE
 };
 
 struct arg {
@@ -241,6 +242,8 @@ start_element(void *data, const char *element_name, const char **atts)
 			arg->type = ARRAY;
 		else if (strcmp(type, "fd") == 0)
 			arg->type = FD;
+		else if (strcmp(type, "double") == 0)
+			arg->type = DOUBLE;
 		else if (strcmp(type, "new_id") == 0) {
 			if (interface_name == NULL)
 				fail(ctx, "no interface name given");
@@ -341,6 +344,9 @@ emit_type(struct arg *a)
 		break;
 	case OBJECT:
 		printf("struct %s *", a->interface_name);
+		break;
+	case DOUBLE:
+		printf("double ");
 		break;
 	case ARRAY:
 		printf("struct wl_array *");
@@ -766,6 +772,9 @@ emit_messages(struct wl_list *message_list,
 				break;
 			case FD:
 				printf("h");
+				break;
+			case DOUBLE:
+				printf("d");
 				break;
 			}
 		}
