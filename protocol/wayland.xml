@@ -33,6 +33,14 @@
   <!-- The core global object. This is a special singleton object.
        It is used for internal wayland protocol features. -->
   <interface name="wl_display" version="1" client:custom="yes">
+    <!-- This is a special request used to send initial out-of-band
+         data (such as the credentials of the client). Clients must
+         send it immediately after connecting to the compositor, and
+         compositors must read it immediately after accepting the
+         connection. The compositor responds to this request by
+         emitting global events. -->
+    <request name="hello" />
+
     <request name="bind">
       <arg name="name" type="uint"/>
       <arg name="interface" type="string"/>

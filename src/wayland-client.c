@@ -252,6 +252,7 @@ connect_to_socket(struct wl_display *display, const char *name)
 	socklen_t size;
 	const char *runtime_dir;
 	size_t name_size;
+	int one = 1;
 
 	display->fd = socket(PF_LOCAL, SOCK_STREAM | SOCK_CLOEXEC, 0);
 	if (display->fd < 0)
@@ -282,6 +283,8 @@ connect_to_socket(struct wl_display *display, const char *name)
 		close(display->fd);
 		return -1;
 	}
+
+	setsockopt(display->fd, SOL_SOCKET, SO_PASSCRED, &one, sizeof(one));
 
 	return 0;
 }
@@ -335,6 +338,13 @@ wl_display_connect(const char *name)
 	if (display->connection == NULL) {
 		wl_map_release(&display->objects);
 		close(display->fd);
+		free(display);
+		return NULL;
+	}
+
+	if (wl_connection_client_handshake(display->connection) < 0) {
+		wl_connection_destroy(display->connection);
+		wl_map_release(&display->objects);
 		free(display);
 		return NULL;
 	}

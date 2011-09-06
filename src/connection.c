@@ -199,7 +199,7 @@ wl_connection_consume(struct wl_connection *connection, size_t size)
 }
 
 static void
-build_cmsg(struct wl_buffer *buffer, char *data, int *clen)
+build_fds_cmsg(struct wl_buffer *buffer, char *data, int *clen)
 {
 	struct cmsghdr *cmsg;
 	size_t size;
@@ -211,7 +211,7 @@ build_cmsg(struct wl_buffer *buffer, char *data, int *clen)
 		cmsg->cmsg_type = SCM_RIGHTS;
 		cmsg->cmsg_len = CMSG_LEN(size);
 		wl_buffer_copy(buffer, CMSG_DATA(cmsg), size);
-		*clen = cmsg->cmsg_len;
+		*clen = CMSG_SPACE(size);
 	} else {
 		*clen = 0;
 	}
@@ -261,7 +261,7 @@ wl_connection_data(struct wl_connection *connection, uint32_t mask)
 	if (mask & WL_CONNECTION_WRITABLE) {
 		wl_buffer_get_iov(&connection->out, iov, &count);
 
-		build_cmsg(&connection->fds_out, cmsg, &clen);
+		build_fds_cmsg(&connection->fds_out, cmsg, &clen);
 
 		msg.msg_name = NULL;
 		msg.msg_namelen = 0;
@@ -324,6 +324,113 @@ wl_connection_data(struct wl_connection *connection, uint32_t mask)
 	}	
 
 	return connection->in.head - connection->in.tail;
+}
+
+int
+wl_connection_server_handshake(struct wl_connection *connection,
+			       pid_t *pid, uid_t *uid, gid_t *gid)
+{
+	struct msghdr msg;
+	struct iovec iov;
+	uint32_t buf[2];
+	char cmsg_buf[CMSG_SPACE(sizeof(struct ucred))];
+	struct cmsghdr *cmsg;
+	struct ucred tmp;
+	ssize_t len;
+
+	iov.iov_base = buf;
+	iov.iov_len = sizeof(buf);
+
+	msg.msg_name = NULL;
+	msg.msg_namelen = 0;
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
+	msg.msg_control = cmsg_buf;
+	msg.msg_controllen = sizeof(cmsg_buf);
+	msg.msg_flags = 0;
+
+	do {
+		len = recvmsg(connection->fd, &msg, MSG_CMSG_CLOEXEC);
+	} while (len < 0 && errno == EINTR);
+
+	if (len < 0) {
+		fprintf(stderr,
+			"read error for connection %p, fd %d: %m\n",
+			connection, connection->fd);
+		return -1;
+	}
+
+	/* Sanity check the handshake */
+	if (buf[0] != 1
+	    || buf[1] != (sizeof(buf) << 2))
+		return -1;
+
+	/* Check the control message */
+	cmsg = (struct cmsghdr *) cmsg_buf;
+	if (cmsg->cmsg_level != SOL_SOCKET
+	    || cmsg->cmsg_level != SCM_CREDENTIALS
+	    || cmsg->cmsg_len != CMSG_LEN(sizeof(struct ucred)))
+		return -1;
+
+	memcpy(&tmp, CMSG_DATA(cmsg), sizeof(struct ucred));
+
+	if (pid)
+		*pid = tmp.pid;
+	if (uid)
+		*uid = tmp.uid;
+	if (gid)
+		*gid = tmp.gid;
+
+	return 0;
+}
+
+int
+wl_connection_client_handshake(struct wl_connection *connection)
+{
+	struct msghdr msg;
+	struct iovec iov;
+	uint32_t buf[2];
+	char cmsg_buf[CMSG_SPACE(sizeof(struct ucred))];
+	struct cmsghdr *cmsg;
+	struct ucred tmp;
+	ssize_t len;
+
+	buf[0] = 1; /* display object */
+	buf[1] = (sizeof(buf) << 16); /* opcode is 0 */
+
+	iov.iov_base = buf;
+	iov.iov_len = sizeof(buf);
+
+	tmp.pid = getpid();
+	tmp.uid = getuid();
+	tmp.gid = getgid();
+
+	cmsg = (struct cmsghdr *) cmsg_buf;
+	cmsg->cmsg_level = SOL_SOCKET;
+	cmsg->cmsg_type = SCM_CREDENTIALS;
+	cmsg->cmsg_len = CMSG_LEN(sizeof(struct ucred));
+	memcpy(CMSG_DATA(cmsg), &tmp, sizeof(struct ucred));
+
+	msg.msg_name = NULL;
+	msg.msg_namelen = 0;
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
+	msg.msg_control = cmsg_buf;
+	msg.msg_controllen = sizeof(cmsg_buf);
+	msg.msg_flags = 0;
+
+	do {
+		len = sendmsg(connection->fd, &msg, MSG_NOSIGNAL);
+	} while (len < 0 && errno == EINTR);
+
+	if (len < 0) {
+		fprintf(stderr,
+			"write error for connection %p, fd %d: %m\n",
+			connection, connection->fd);
+		return -1;
+	}
+
+	return 0;
 }
 
 void
