@@ -711,6 +711,9 @@ emit_structs(struct wl_list *message_list, struct interface *interface)
 				emit_type(a);
 
 			printf("%s", a->name);
+
+			if (a->type == NEW_ID)
+				printf(",\n%suint32_t client_version", indent(n));
 		}
 
 		printf(");\n");
